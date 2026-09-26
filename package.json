@@ -1,0 +1,56 @@
+{
+  "name": "atproto-slack-clone",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
+  "packageManager": "pnpm@11.11.0",
+  "scripts": {
+    "dev": "next dev --webpack --hostname 127.0.0.1",
+    "build": "next build --webpack",
+    "start": "next start --hostname 127.0.0.1",
+    "codegen:lex": "node scripts/codegen-lex.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "node --import tsx --test 'src/**/*.test.ts'",
+    "test:acceptance": "pnpm build && node --import tsx --test protocol-tests/app-acceptance.test.ts protocol-tests/reconcile-workspaces.test.ts",
+    "test:browser": "pnpm build && node --import tsx --test protocol-tests/browser/oauth-callback.spec.ts",
+    "test:performance": "node --import tsx --test protocol-tests/performance-envelope.test.ts",
+    "backup:db": "node scripts/backup-db.mjs",
+    "reconcile": "node --import tsx scripts/reconcile-workspaces.ts"
+  },
+  "dependencies": {
+    "@atproto/crypto": "0.5.5",
+    "@atproto/identity": "0.5.13",
+    "@atproto/jwk-jose": "0.2.4",
+    "@atproto/lex-client": "0.3.6",
+    "@atproto/lex-data": "0.1.7",
+    "@atproto/lex-schema": "0.2.7",
+    "@atproto/lexicon": "0.7.14",
+    "@atproto/oauth-client-node": "0.5.7",
+    "@atproto/xrpc": "0.8.13",
+    "@atproto/xrpc-server": "0.13.1",
+    "@next/env": "16.3.6",
+    "better-sqlite3": "12.6.0",
+    "kysely": "0.29.5",
+    "multiformats": "13.4.2",
+    "next": "16.3.6",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "undici": "7.29.1"
+  },
+  "devDependencies": {
+    "@atproto/lex-cli": "0.10.13",
+    "@playwright/test": "1.63.0",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "24.0.0",
+    "@types/react": "19.0.0",
+    "@types/react-dom": "19.0.0",
+    "eslint": "9.39.1",
+    "eslint-config-next": "16.3.6",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}

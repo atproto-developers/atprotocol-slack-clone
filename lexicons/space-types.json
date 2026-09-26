@@ -1,0 +1,24 @@
+{
+  "proposal": "0016",
+  "pdsCommit": "787a730fcd22ed7791e2636beb509a943017ba1c",
+  "types": {
+    "org.slack.workspace": {
+      "readPolicy": "member-list",
+      "writePolicy": "member-list",
+      "appAccess": "open",
+      "collections": ["org.slack.workspace.profile", "org.slack.directory", "org.slack.workspace.roster", "org.slack.admin", "org.slack.acceptance"]
+    },
+    "org.slack.channel": {
+      "readPolicy": "member-list",
+      "writePolicy": "member-list",
+      "appAccess": "open",
+      "collections": ["org.slack.channel.message", "org.slack.channel.reaction", "org.slack.channel.roster"]
+    },
+    "org.slack.inbox": {
+      "readPolicy": "member-list",
+      "writePolicy": "member-list",
+      "appAccess": "open",
+      "collections": ["org.slack.joinRequest", "org.slack.joinDecision"]
+    }
+  }
+}
