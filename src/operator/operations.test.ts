@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertWorkspaceRosterMatchesPds, validateOperatorRequest } from "./operations";
+import { assertWorkspaceRosterMatchesPds, savedWorkspaceOperations, validateOperatorRequest } from "./operations";
 import type { OperatorActor } from "./security";
 
 const actor = { workspace: { authorityDid: "did:plc:owner" } } as OperatorActor;
@@ -40,4 +40,21 @@ test("workspace channel grants require the roster and live PDS membership to mat
     [{ did: member, read: true, write: false }],
     authority,
   ), /roster has not converged/i);
+});
+
+test("recovery keeps unreadable journal rows visible instead of silently skipping them", () => {
+  const workspace = "at://did:plc:owner/space/org.slack.workspace/team";
+  const recoveringActor = { did: "did:plc:admin", workspace: { authorityDid: "did:plc:owner", uri: workspace } } as OperatorActor;
+  const rows = [
+    { actor: "did:plc:admin", operationId: "current", requestJson: JSON.stringify({ workspace, request: { kind: "reconcileWorkspace" } }) },
+    { actor: "did:plc:other", operationId: "valid", requestJson: JSON.stringify({ workspace, request: { kind: "leaveWorkspace" } }) },
+    { actor: "did:plc:other", operationId: "corrupt", requestJson: "{not json" },
+    { actor: "did:plc:other", operationId: "no-request", requestJson: JSON.stringify({ workspace }) },
+    { actor: "did:plc:other", operationId: "elsewhere", requestJson: JSON.stringify({ workspace: `${workspace}-2`, request: { kind: "leaveWorkspace" } }) },
+  ];
+  assert.deepEqual(savedWorkspaceOperations(rows, recoveringActor, "current"), [
+    { actor: "did:plc:other", operationId: "valid", request: { kind: "leaveWorkspace" } },
+    { actor: "did:plc:other", operationId: "corrupt", request: null },
+    { actor: "did:plc:other", operationId: "no-request", request: null },
+  ]);
 });

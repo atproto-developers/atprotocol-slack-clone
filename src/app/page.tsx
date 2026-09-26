@@ -3,7 +3,7 @@ import { getConfig } from "@/lib/config";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { LoginForm } from "./ui/login-form";
-import { WorkspaceShell } from "./ui/workspace-shell";
+import { WorkspaceManager } from "./ui/workspace-manager";
 import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
@@ -33,6 +33,6 @@ export default async function HomePage() {
       </main>
     );
   }
-  if (session) return <WorkspaceShell did={session.did} />;
+  if (session) return <WorkspaceManager did={session.did} />;
   return <LoginForm />;
 }

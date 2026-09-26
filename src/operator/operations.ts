@@ -12,7 +12,7 @@ import { bootstrapWorkspace } from "@/workspaces/bootstrap";
 import { WorkspaceEnvelopeError } from "@/workspaces/read-model";
 import { assertAdminMutationsEnabled } from "./mutations-paused";
 import type { OperationContext, OperationView } from "./journal";
-import { listRecoverableOperations, OperationBusyError, OperationRejectedError, runJournaledOperation } from "./journal";
+import { auditOperationEvent, listRecoverableOperations, OperationBusyError, OperationRejectedError, runJournaledOperation } from "./journal";
 import type { OperatorActor } from "./security";
 
 export type OperatorRequest = Record<string, unknown> & { kind: string };
@@ -36,44 +36,54 @@ export async function executeOperatorOperation(
 }
 
 async function resumeRecoverableOperations(actor: OperatorActor, currentOperationId: string): Promise<void> {
-  const isCurrent = (row: { actor: string; operationId: string }) => row.actor === actor.did && row.operationId === currentOperationId;
-  const recoverable = listRecoverableOperations(actor.workspace.authorityDid, actor.workspace.uri).filter((row) => {
-    try {
-      const saved: unknown = JSON.parse(row.requestJson);
-      return isPlainObject(saved) && saved.workspace === actor.workspace.uri && isPlainObject(saved.request);
-    } catch { return false; }
-  });
-  const pending = recoverable.filter((row) => !isCurrent(row));
+  const pending = savedWorkspaceOperations(listRecoverableOperations(actor.workspace.authorityDid, actor.workspace.uri), actor, currentOperationId);
   for (const row of pending) {
-    let saved: unknown;
-    try { saved = JSON.parse(row.requestJson); }
-    catch { continue; }
-    if (!isPlainObject(saved) || saved.workspace !== actor.workspace.uri || !isPlainObject(saved.request)) continue;
     try {
-      if (saved.request.kind === "bootstrapWorkspace") {
-        if (actor.did !== actor.workspace.authorityDid || row.actor !== actor.workspace.authorityDid || typeof saved.request.name !== "string") continue;
-        await bootstrapWorkspace(actor.session, { name: saved.request.name, operationId: row.operationId });
+      if (!row.request) throw new Error("Journaled operation request is unreadable.");
+      if (row.request.kind === "bootstrapWorkspace") {
+        if (actor.did !== actor.workspace.authorityDid || row.actor !== actor.workspace.authorityDid || typeof row.request.name !== "string") {
+          throw new Error("Workspace bootstrap can only be resumed by the workspace authority.");
+        }
+        await bootstrapWorkspace(actor.session, { name: row.request.name, operationId: row.operationId });
         continue;
       }
       // The row was created only after this actor passed service-auth and PDS
       // role checks. The current admin authorizes recovery; the original DID
       // remains the operation and audit principal even if removal was partial.
       const priorActor = { ...actor, did: row.actor };
-      const priorRequest = validateOperatorRequest(saved.request, priorActor);
+      const priorRequest = validateOperatorRequest(row.request, priorActor);
       await runJournaledOperation(priorActor, row.operationId, priorRequest, async (context) => {
         await executeByKind(priorActor, context, priorRequest);
       });
-    } catch { /* A still-active admin can inspect and retry this operation; never reconcile around it. */ }
+    } catch (error) {
+      // Leave the row pending for an active admin to inspect; never reconcile around it.
+      auditOperationEvent(actor, row.operationId, "operationResumeFailed", { originalActor: row.actor, error: error instanceof Error ? error.message : "Unknown error" });
+    }
   }
-  const remaining = listRecoverableOperations(actor.workspace.authorityDid, actor.workspace.uri)
-    .filter((row) => !isCurrent(row))
-    .filter((row) => {
-      try {
-        const saved: unknown = JSON.parse(row.requestJson);
-        return isPlainObject(saved) && saved.workspace === actor.workspace.uri;
-      } catch { return false; }
+  // Unreadable rows cannot be replayed or cleared in-app; they stay visible in the
+  // audit log and stalled-operation alert instead of wedging every admin action.
+  const remaining = savedWorkspaceOperations(listRecoverableOperations(actor.workspace.authorityDid, actor.workspace.uri), actor, currentOperationId)
+    .filter((row) => row.request !== null);
+  if (remaining.length > 0) {
+    throw new Error(`Pending workspace operations could not be resumed (${remaining.map((row) => row.operationId).join(", ")}); membership reconciliation was skipped.`);
+  }
+}
+
+export function savedWorkspaceOperations(
+  rows: Array<{ actor: string; operationId: string; requestJson: string }>,
+  actor: Pick<OperatorActor, "did" | "workspace">,
+  currentOperationId: string,
+): Array<{ actor: string; operationId: string; request: Record<string, unknown> | null }> {
+  return rows
+    .filter((row) => !(row.actor === actor.did && row.operationId === currentOperationId))
+    .flatMap((row) => {
+      let saved: unknown;
+      try { saved = JSON.parse(row.requestJson); }
+      catch { return [{ actor: row.actor, operationId: row.operationId, request: null }]; }
+      if (isPlainObject(saved) && saved.workspace !== actor.workspace.uri) return [];
+      const request = isPlainObject(saved) && isPlainObject(saved.request) ? saved.request : null;
+      return [{ actor: row.actor, operationId: row.operationId, request }];
     });
-  if (remaining.length > 0) throw new Error("Pending workspace operations could not be resumed; membership reconciliation was skipped.");
 }
 
 export async function listInboxWriters(actor: OperatorActor): Promise<{ inbox: string; writers: string[]; checkedAt: string }> {

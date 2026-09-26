@@ -11,12 +11,15 @@ import { selectValidChannelMessages } from "@/atproto/valid-channel-messages";
 import { mintSpaceCredential, type SpaceCredential } from "@/atproto/space-credential";
 import { AtprotoClient } from "@/atproto/xrpc";
 import { getRawDb } from "@/lib/db";
+import { mapLimited } from "@/lib/map-limited";
 import { spaceRecordUri } from "@/protocol/keys";
 import { validateSpaceRecord } from "@/protocol/records";
 import { ChannelUnavailableError, requireReadableChannel } from "./channels";
 import { purgeSpaceCache, purgeWorkspaceCache } from "./cache";
 
 const PAGE = 100;
+const BACKFILL_PAGE = 1_000;
+const REPO_CONCURRENCY = 8;
 const MAX_HISTORY = 20_000;
 type Cached = { repo: string; rkey: string; uri: string; value: Record<string, unknown> };
 
@@ -58,11 +61,11 @@ export async function readChannelPage(session: OAuthSession, workspace: string, 
       }
       return client;
     };
-    for (const repo of repos) {
+    await mapLimited(repos, REPO_CONCURRENCY, async (repo) => {
       const client = await clientFor(repo.did);
       await refresh(session.did, space, repo.did, client, "org.slack.channel.message");
       await refresh(session.did, space, repo.did, client, "org.slack.channel.reaction");
-    }
+    });
     const collection = "org.slack.channel.message";
     const required = Math.min(offset + PAGE + 1, MAX_HISTORY + 1);
     let scanTarget = Math.min(required, MAX_HISTORY);
@@ -211,7 +214,7 @@ async function fillLatest(
       return !cutoff || !lastSeen || lastSeen >= cutoff ? [{ repo, state }] : [];
     });
     if (candidates.length === 0 || records.length >= MAX_HISTORY) return;
-    await Promise.all(candidates.map(async ({ repo, state }) => {
+    await mapLimited(candidates, REPO_CONCURRENCY, async ({ repo, state }) => {
       const client = await clientFor(repo.did);
       const cursor = state.next_cursor ?? undefined;
       const usedCursors = seenCursors.get(repo.did) ?? new Set<string>();
@@ -225,7 +228,7 @@ async function fillLatest(
       const keys = seenRkeys.get(repo.did) ?? new Set<string>();
       seenRkeys.set(repo.did, keys);
       commitPageAndAdvanceCursor(account, space, repo.did, collection, state.rev, cursor!, page, keys);
-    }));
+    });
   }
 }
 
@@ -247,30 +250,31 @@ async function fillOlder(
     keys.add(row.rkey);
     seenRkeys.set(row.repo_did, keys);
   }
-  for (let round = 0; cachedCount(account, space, collection) < goal && round < MAX_HISTORY; round += 1) {
-    let storedThisRound = 0;
-    for (const repo of repos) {
-      const count = cachedCount(account, space, collection);
-      if (count >= goal || count >= MAX_HISTORY) break;
+  for (let round = 0; round < MAX_HISTORY; round += 1) {
+    const remaining = Math.min(goal, MAX_HISTORY) - cachedCount(account, space, collection);
+    if (remaining <= 0) break;
+    const candidates = repos.flatMap((repo) => {
       const state = raw.prepare("SELECT rev,next_cursor,finished FROM space_collection_cursor WHERE account_did=? AND space_uri=? AND repo_did=? AND collection=?")
         .get(account, space, repo.did, collection) as { rev: string; next_cursor: string | null; finished: number } | undefined;
-      if (!state?.next_cursor || state.finished) continue;
+      return state?.next_cursor && !state.finished ? [{ repo, cursor: state.next_cursor, rev: state.rev }] : [];
+    }).slice(0, remaining);
+    if (candidates.length === 0) return;
+    const limit = backfillPageLimit(remaining, candidates.length);
+    const stored = await mapLimited(candidates, REPO_CONCURRENCY, async ({ repo, cursor, rev }) => {
       const client = await clientFor(repo.did);
       const usedCursors = seenCursors.get(repo.did) ?? new Set<string>();
       seenCursors.set(repo.did, usedCursors);
-      if (usedCursors.has(state.next_cursor)) throw new Error("PDS record pagination did not advance.");
-      usedCursors.add(state.next_cursor);
-      const limit = Math.min(PAGE, MAX_HISTORY - count);
+      if (usedCursors.has(cursor)) throw new Error("PDS record pagination did not advance.");
+      usedCursors.add(cursor);
       const page = await client.query<ListRecords.OutputSchema>("com.atproto.space.listRecords", {
-        space, repo: repo.did, collection, cursor: state.next_cursor, limit,
+        space, repo: repo.did, collection, cursor, limit,
       });
-      assertBoundedRecordPage(page, { collection, limit, cursor: state.next_cursor, seenCursors: usedCursors });
+      assertBoundedRecordPage(page, { collection, limit, cursor, seenCursors: usedCursors });
       const keys = seenRkeys.get(repo.did) ?? new Set<string>();
       seenRkeys.set(repo.did, keys);
-      const result = commitPageAndAdvanceCursor(account, space, repo.did, collection, state.rev, state.next_cursor, page, keys);
-      storedThisRound += result.stored;
-    }
-    if (storedThisRound === 0) return;
+      return commitPageAndAdvanceCursor(account, space, repo.did, collection, rev, cursor, page, keys).stored;
+    });
+    if (stored.every((count) => count === 0)) return;
   }
   if (goal < MAX_HISTORY || cachedCount(account, space, collection) < goal) return;
   for (const repo of repos) {
@@ -291,6 +295,10 @@ async function fillOlder(
     seenRkeys.set(repo.did, keys);
     commitPageAndAdvanceCursor(account, space, repo.did, collection, state.rev, state.next_cursor, page, keys);
   }
+}
+
+export function backfillPageLimit(remaining: number, candidates: number): number {
+  return Math.max(1, Math.min(BACKFILL_PAGE, Math.floor(remaining / Math.max(1, candidates))));
 }
 
 function commitPageAndAdvanceCursor(

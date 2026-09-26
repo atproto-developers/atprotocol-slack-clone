@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { channelPageHasMore } from "./channel-sync";
+import { backfillPageLimit, channelPageHasMore } from "./channel-sync";
 
 test("channel history pagination stops at the configured cap while retaining earlier pages", () => {
   assert.equal(channelPageHasMore(19_800, 100, 19_900, 19_900, true), true);
@@ -12,4 +12,12 @@ test("channel history pagination stops offering empty pages after raw invalid re
   assert.equal(channelPageHasMore(0, 100, 500, 20_000, true), true);
   assert.equal(channelPageHasMore(400, 100, 500, 20_000, true), false);
   assert.equal(channelPageHasMore(500, 100, 500, 20_000, true), false);
+});
+
+test("reaction backfill pages split the remaining cap across writer repos without overshooting it", () => {
+  assert.equal(backfillPageLimit(20_000, 1), 1_000);
+  assert.equal(backfillPageLimit(20_000, 199), 100);
+  assert.equal(backfillPageLimit(150, 199), 1);
+  assert.equal(backfillPageLimit(999, 3), 333);
+  assert.ok(backfillPageLimit(999, 3) * 3 <= 999);
 });

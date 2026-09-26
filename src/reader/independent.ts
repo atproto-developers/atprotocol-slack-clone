@@ -10,6 +10,7 @@ import { selectValidChannelMessages } from "@/atproto/valid-channel-messages";
 import { listBoundedSpaces } from "@/atproto/space-pages";
 import { channelUri, spaceRecordUri } from "@/protocol/keys";
 import { validateSpaceRecord } from "@/protocol/records";
+import { mapLimited } from "@/lib/map-limited";
 
 export type IndependentWorkspace = {
   uri: string;
@@ -288,17 +289,4 @@ async function readIndependentReactions(
     }
   }
   return result(false);
-}
-
-async function mapLimited<T, R>(items: T[], concurrency: number, action: (item: T) => Promise<R>): Promise<R[]> {
-  const result = new Array<R>(items.length);
-  let index = 0;
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (true) {
-      const current = index++;
-      if (current >= items.length) return;
-      result[current] = await action(items[current]);
-    }
-  }));
-  return result;
 }

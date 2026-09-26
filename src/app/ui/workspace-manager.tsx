@@ -1,15 +1,13 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LogoutButton } from "./logout-button";
+import { ChannelView } from "./channel-view";
+import { api, httpStatus, isAccessFailure, makeTid, mergeMessages, messageOf, parseWorkspaceUri, TRANSITIONING_STATUS, withReactions, type ChannelSelection, type InboxRequest, type Message, type PendingOperation, type Reaction, type StalledOperation } from "./client-api";
+import { Sidebar } from "./sidebar";
+import { WorkspaceHome } from "./workspace-home";
+import { WorkspaceOnboarding } from "./workspace-onboarding";
 import type { WorkspaceCandidate, WorkspaceSummary } from "@/workspaces/read-model";
 
-type Message = { uri: string; rkey: string; repo: string; value: { text?: string; createdAt?: string; parent?: string }; reactions?: Array<{ emoji: string; count: number; active: boolean }> };
-type Reaction = { repo: string; value: { subject?: string; emoji?: string } };
-type InboxRequest = { uri: string; repoDid: string; channelSkey: string; channelName: string; requestId: string; createdAt: string };
-type ChannelSelection = { workspace: string; skey: string; name: string; visibility: string };
-type PendingOperation = { workspace: string; operationId: string; request: Record<string, unknown> };
-type StalledOperation = { actor: string; operationId: string; state: string; error: string | null; updatedAt: string };
 type RefreshSelectedChannel = (selected: ChannelSelection, reloadContent?: boolean) => Promise<void>;
 
 export function WorkspaceManager({ did }: { did: string }) {
@@ -22,11 +20,6 @@ export function WorkspaceManager({ did }: { did: string }) {
   const [workspaceName, setWorkspaceName] = useState("");
   const [workspaceOperationId, setWorkspaceOperationId] = useState("");
   const [inviteUri, setInviteUri] = useState("");
-  const [inviteDid, setInviteDid] = useState("");
-  const [channelName, setChannelName] = useState("");
-  const [channelVisibility, setChannelVisibility] = useState<"public" | "private">("public");
-  const [privateMembers, setPrivateMembers] = useState("");
-  const [transitionMembers, setTransitionMembers] = useState("");
   const [messageText, setMessageText] = useState("");
   const [replyTo, setReplyTo] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -74,25 +67,28 @@ export function WorkspaceManager({ did }: { did: string }) {
     setActiveChannel(channel);
   }, []);
 
+  const resetChannelContent = useCallback(() => {
+    setMessages([]); setPrivateRoster([]); setHasMore(false); setNextOffset(0); setReplyTo(""); setMessageText("");
+    setNeedChannelRead(false); setNeedChannelWrite(false); setNeedJoinWrite(false); setRequestSubmitted(false);
+  }, []);
+
   const clearChannelView = useCallback(() => {
     channelDataEpoch.current += 1;
     activeChannelRef.current = null;
-    setActiveChannel(null); setMessages([]); setPrivateRoster([]); setHasMore(false); setNextOffset(0); setReplyTo("");
-    setMessageText("");
-    setNeedChannelRead(false); setNeedChannelWrite(false); setNeedJoinWrite(false); setRequestSubmitted(false);
-  }, []);
+    setActiveChannel(null);
+    resetChannelContent();
+  }, [resetChannelContent]);
 
   const handleChannelReadFailure = useCallback((caught: unknown) => {
     const statusCode = httpStatus(caught);
     if (statusCode !== 401 && statusCode !== 403 && statusCode !== 409) return false;
     channelDataEpoch.current += 1;
-    setMessages([]); setPrivateRoster([]); setHasMore(false); setNextOffset(0); setReplyTo(""); setMessageText("");
-    setNeedChannelWrite(false); setNeedJoinWrite(false); setRequestSubmitted(false);
+    resetChannelContent();
     setNeedChannelRead(statusCode === 401 || statusCode === 403);
     const selected = activeChannelRef.current;
     if (selected) void refreshSelectedChannelRef.current?.(selected, false).catch((error) => setError(messageOf(error)));
     return true;
-  }, []);
+  }, [resetChannelContent]);
 
   const refreshWorkspaces = useCallback(async () => {
     const requestEpoch = ++workspaceRefreshEpoch.current;
@@ -118,9 +114,8 @@ export function WorkspaceManager({ did }: { did: string }) {
           else if (channel.visibility !== selectedChannel.visibility) {
             channelDataEpoch.current += 1;
             selectChannel({ ...selectedChannel, name: channel.name, visibility: channel.visibility });
-            setMessages([]); setPrivateRoster([]); setHasMore(false); setNextOffset(0); setReplyTo(""); setMessageText("");
-            setNeedChannelRead(false); setNeedChannelWrite(false); setNeedJoinWrite(false); setRequestSubmitted(false);
-            if (channel.visibility === "transitioning") setStatus("This channel is transitioning. Sync and posting are paused until its access changes finish.");
+            resetChannelContent();
+            if (channel.visibility === "transitioning") setStatus(TRANSITIONING_STATUS);
           } else if (channel.name !== selectedChannel.name) selectChannel({ ...selectedChannel, name: channel.name });
         }
         if (!result.workspaces.find((workspace) => workspace.uri === current)?.isAdmin) {
@@ -138,7 +133,7 @@ export function WorkspaceManager({ did }: { did: string }) {
       setInbox([]); setStalledOperations([]);
       throw caught;
     }
-  }, [clearChannelView, selectChannel, selectWorkspace]);
+  }, [clearChannelView, resetChannelContent, selectChannel, selectWorkspace]);
 
   const loadMessages = useCallback(async (channel: ChannelSelection, offset = 0, append = false) => {
     const selectedChannel = activeChannelRef.current;
@@ -153,25 +148,8 @@ export function WorkspaceManager({ did }: { did: string }) {
       throw caught;
     }
     if (channelDataEpoch.current !== requestEpoch) return false;
-    const grouped = new Map<string, Map<string, { count: number; active: boolean }>>();
-    for (const reaction of result.reactions) {
-      if (typeof reaction.value.subject !== "string" || typeof reaction.value.emoji !== "string") continue;
-      const emojis = grouped.get(reaction.value.subject) ?? new Map<string, { count: number; active: boolean }>();
-      const current = emojis.get(reaction.value.emoji) ?? { count: 0, active: false };
-      current.count += 1;
-      if (reaction.repo === did) current.active = true;
-      emojis.set(reaction.value.emoji, current);
-      grouped.set(reaction.value.subject, emojis);
-    }
-    const messages = result.messages.map((message) => ({
-      ...message,
-      reactions: [...(grouped.get(message.uri) ?? new Map()).entries()].map(([emoji, value]) => ({ emoji, ...value })),
-    }));
-    setMessages((current) => {
-      const combined = append ? [...current, ...messages] : messages;
-      const unique = new Map(combined.map((message) => [message.uri, message]));
-      return [...unique.values()].sort((a, b) => b.rkey.localeCompare(a.rkey));
-    });
+    const messages = withReactions(result.messages, result.reactions, did);
+    setMessages((current) => mergeMessages(current, messages, append));
     setNextOffset(result.nextOffset);
     setHasMore(result.hasMore);
     setNeedChannelRead(false);
@@ -211,24 +189,23 @@ export function WorkspaceManager({ did }: { did: string }) {
     const currentSelection = latest.name === selection.name && latest.visibility === selection.visibility ? latest : selection;
     channelDataEpoch.current += 1;
     if (channel.visibility === "transitioning") {
-      setMessages([]); setPrivateRoster([]); setHasMore(false); setNextOffset(0); setReplyTo(""); setMessageText("");
-      setNeedChannelRead(false); setNeedChannelWrite(false); setNeedJoinWrite(false); setRequestSubmitted(false);
-      setStatus("This channel is transitioning. Sync and posting are paused until its access changes finish.");
+      resetChannelContent();
+      setStatus(TRANSITIONING_STATUS);
       return;
     }
     if (!reloadContent) return;
     if (channel.visibility !== "private") setPrivateRoster([]);
     void loadMessages(currentSelection).catch((caught) => {
-      if (![401, 403, 409].includes(httpStatus(caught) ?? 0)) setError(messageOf(caught));
+      if (!isAccessFailure(caught)) setError(messageOf(caught));
     });
     if (channel.visibility === "private") void refreshPrivateRoster(currentSelection).catch((caught) => {
-      if (![401, 403, 409].includes(httpStatus(caught) ?? 0)) setError(messageOf(caught));
+      if (!isAccessFailure(caught)) setError(messageOf(caught));
     });
-  }, [clearChannelView, loadMessages, refreshPrivateRoster, refreshWorkspaces, selectChannel]);
+  }, [clearChannelView, loadMessages, refreshPrivateRoster, refreshWorkspaces, resetChannelContent, selectChannel]);
   useEffect(() => { refreshSelectedChannelRef.current = refreshSelectedChannel; }, [refreshSelectedChannel]);
 
   const recheckChannelAfterAccessFailure = useCallback((caught: unknown) => {
-    if (![401, 403, 409].includes(httpStatus(caught) ?? 0)) return;
+    if (!isAccessFailure(caught)) return;
     const selected = activeChannelRef.current;
     if (selected) void refreshSelectedChannel(selected, false).catch((error) => setError(messageOf(error)));
   }, [refreshSelectedChannel]);
@@ -339,7 +316,7 @@ export function WorkspaceManager({ did }: { did: string }) {
     const query = new URLSearchParams({ workspace: activeWorkspace.uri, inbox: "1", after: "0" });
     const events = new EventSource(`/api/notifications?${query}`);
     events.addEventListener("change", () => void loadInbox());
-    events.addEventListener("error", () => void loadInbox());
+    events.addEventListener("error", () => { if (events.readyState === EventSource.CLOSED) void loadInbox(); });
     return () => { window.clearTimeout(timer); window.clearInterval(interval); events.close(); };
   }, [activeWorkspace?.uri, activeWorkspace?.isAdmin, loadInbox, loadStalledOperations]);
 
@@ -368,7 +345,7 @@ export function WorkspaceManager({ did }: { did: string }) {
         void refreshWorkspaces().catch((caught) => setError(messageOf(caught)));
       };
       events.addEventListener("change", refresh);
-      events.addEventListener("error", refresh);
+      events.addEventListener("error", () => { if (events.readyState === EventSource.CLOSED) refresh(); });
       const interval = window.setInterval(refresh, 60_000);
       return () => { window.clearInterval(interval); events.close(); };
     }
@@ -379,10 +356,11 @@ export function WorkspaceManager({ did }: { did: string }) {
     const refresh = () => {
       void refreshSelectedChannel(activeChannel).catch((caught) => setError(messageOf(caught)));
     };
+    const refreshWhenClosed = (source: EventSource) => () => { if (source.readyState === EventSource.CLOSED) refresh(); };
     channelEvents?.addEventListener("change", refresh);
-    channelEvents?.addEventListener("error", refresh);
+    if (channelEvents) channelEvents.addEventListener("error", refreshWhenClosed(channelEvents));
     workspaceEvents.addEventListener("change", refresh);
-    workspaceEvents.addEventListener("error", refresh);
+    workspaceEvents.addEventListener("error", refreshWhenClosed(workspaceEvents));
     return () => { channelEvents?.close(); workspaceEvents.close(); };
   }, [activeChannel, activeWorkspace?.uri, refreshSelectedChannel, refreshWorkspaces]);
 
@@ -461,17 +439,17 @@ export function WorkspaceManager({ did }: { did: string }) {
           const selection = { workspace, skey: refreshedChannel.skey, name: refreshedChannel.name, visibility: refreshedChannel.visibility };
           selectChannel(selection);
           if (refreshedChannel.visibility === "transitioning") {
-            setMessages([]); setPrivateRoster([]); setHasMore(false); setNextOffset(0); setNeedChannelRead(false);
-            setStatus("This channel is transitioning. Sync and posting are paused until its access changes finish.");
+            resetChannelContent();
+            setStatus(TRANSITIONING_STATUS);
           } else {
             if (refreshedChannel.visibility === "private") {
               await refreshPrivateRoster(selection).catch((caught) => {
-                if (![401, 403, 409].includes(httpStatus(caught) ?? 0)) setError(messageOf(caught));
+                if (!isAccessFailure(caught)) setError(messageOf(caught));
               });
             } else setPrivateRoster([]);
             if (channelDataEpoch.current !== selectionEpoch) return;
             await loadMessages(selection).catch((caught) => {
-              if (![401, 403, 409].includes(httpStatus(caught) ?? 0)) setError(messageOf(caught));
+              if (!isAccessFailure(caught)) setError(messageOf(caught));
             });
           }
         }
@@ -489,10 +467,10 @@ export function WorkspaceManager({ did }: { did: string }) {
     if (!activeWorkspace) return;
     const selected = { workspace: activeWorkspace.uri, skey: channel.skey, name: channel.name, visibility: channel.visibility };
     channelDataEpoch.current += 1;
-    selectChannel(selected); setMessages([]); setPrivateRoster([]); setHasMore(false); setNextOffset(0); setReplyTo(""); setMessageText(""); setRequestSubmitted(false); setNeedChannelRead(false); setNeedChannelWrite(false); setError("");
+    selectChannel(selected); resetChannelContent(); setError("");
     try {
       if (selected.visibility === "transitioning") {
-        setStatus("This channel is transitioning. Sync and posting are paused until its access changes finish.");
+        setStatus(TRANSITIONING_STATUS);
         return;
       }
       if (!await loadMessages(selected)) return;
@@ -552,63 +530,28 @@ export function WorkspaceManager({ did }: { did: string }) {
     await runOperation({ kind: "leaveChannel", skey: activeChannel.skey });
   }
 
+  function switchWorkspace(uri: string) {
+    selectWorkspace(uri); clearChannelView(); setInbox([]); setStalledOperations([]);
+  }
+
+  function syncInbox() {
+    inboxPermissionMissingRef.current = false; setInboxPermissionMissing(false); setInboxLoaded(false); void loadInbox();
+  }
+
   return (
     <main className="app-frame">
-      <aside className="sidebar">
-        <div className="sidebar-top"><span className="brand brand-inverse"><span className="brand-mark"><i /><i /><i /></span><span>spaces</span></span><button className="icon-button sidebar-menu" aria-label="Open menu">☰</button></div>
-        <div className="workspace-heading"><span className="workspace-avatar">{activeWorkspace?.name.slice(0, 1).toUpperCase() ?? "S"}</span><span className="workspace-title"><strong>{activeWorkspace?.name ?? "Your spaces"}</strong><small>{activeWorkspace ? "AT Protocol workspace" : "Personal workspace"}</small></span></div>
-        <div className="sidebar-section">
-          <div className="section-label"><span>WORKSPACES</span><button className="plus-button" aria-label="Create workspace" onClick={() => { selectWorkspace(""); clearChannelView(); setInbox([]); setStalledOperations([]); }}>+</button></div>
-          {workspaces.length ? workspaces.map((workspace) => <button key={workspace.uri} className={`sidebar-action ${workspace.uri === activeUri ? "selected-workspace" : ""}`} onClick={() => { selectWorkspace(workspace.uri); clearChannelView(); setInbox([]); setStalledOperations([]); }}><span>◈</span> {workspace.name}</button>) : <div className="empty-workspaces"><span className="empty-icon">⌂</span><p>No workspaces yet</p><span>Start a space for your team</span></div>}
-          {workspaceCandidates.length > 0 && <div className="channel-nav"><div className="section-label"><span>ACCEPTED · NEEDS ACCESS</span></div>{workspaceCandidates.map((candidate) => <button key={candidate.uri} className="sidebar-action" title={candidate.uri} aria-label={`Authorize reading accepted workspace ${candidate.uri}`} onClick={() => void grant("workspaceRead", candidate.uri).catch((caught) => setError(messageOf(caught)))}><span>↗</span> {candidate.skey}</button>)}</div>}
-          {activeWorkspace && <div className="channel-nav"><div className="section-label"><span>CHANNELS</span></div>{activeWorkspace.channels.map((channel) => <button key={channel.skey} className={`channel-nav-item ${activeChannel?.skey === channel.skey ? "active" : ""}`} onClick={() => void openChannel(channel)}><span>{channel.visibility === "private" ? "▣" : "#"}</span>{channel.name}</button>)}</div>}
-        </div>
-        <div className="sidebar-bottom"><div className="connection-state"><span className="connection-dot" /> CONNECTED TO ATPROTO</div><div className="profile-row"><span className="profile-avatar">{did.slice(-1).toUpperCase()}</span><span className="profile-copy"><strong>{did.slice(0, 17)}…</strong><small>Signed in</small></span><LogoutButton /></div></div>
-      </aside>
+      <Sidebar did={did} workspaces={workspaces} workspaceCandidates={workspaceCandidates} activeUri={activeUri} activeWorkspace={activeWorkspace} activeChannel={activeChannel} switchWorkspace={switchWorkspace} openChannel={openChannel} grant={grant} setError={setError} />
       <section className="main-stage">
         <header className="topbar"><div className="breadcrumb">Your spaces <span>/</span> <strong>{activeChannel?.name ?? activeWorkspace?.name ?? "Overview"}</strong></div><div className="topbar-tools"><button className="help-button" onClick={() => void refreshWorkspaces().catch((caught) => setError(messageOf(caught)))}>↻ <span>Refresh</span></button><button className="top-avatar">{did.slice(-1).toUpperCase()}</button></div></header>
         <div className="overview-content">
           {error && <p className="form-error" role="alert">{error}</p>}
-          {status && !(activeChannel?.visibility === "transitioning" && status === "This channel is transitioning. Sync and posting are paused until its access changes finish.") && <p className="status-note" role="status">{status}</p>}
+          {status && !(activeChannel?.visibility === "transitioning" && status === TRANSITIONING_STATUS) && <p className="status-note" role="status">{status}</p>}
           {activeWorkspace && activeWorkspace.degradedReasons.length > 0 && <div className="envelope-alert" role="alert"><strong>Workspace is in degraded mode.</strong><ul>{activeWorkspace.degradedReasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><p>Admin changes and inbox reconciliation are paused until the workspace is within the supported v1 limits.</p></div>}
           {pendingOperation && <p className="status-note">Operation {pendingOperation.operationId} is still pending. <button className="text-button" disabled={busy || workspaceDegraded} onClick={() => void runOperation(pendingOperation.request, pendingOperation.workspace, pendingOperation.operationId)}>Retry same operation ↻</button></p>}
           {stalledOperations.length > 0 && <div className="operation-alert" role="alert"><strong>{stalledOperations.length} operation(s) have had no progress for at least five minutes.{stalledOperationsTruncated ? " Showing the oldest 100; more stalled operations exist." : ""}</strong>{stalledOperations.map((operation) => <p key={`${operation.actor}:${operation.operationId}`}>{operation.operationId} · {operation.actor} · {operation.error ?? operation.state}</p>)}</div>}
-          {!activeWorkspace && <>
-            <div className="welcome-banner"><div><div className="eyebrow"><span className="eyebrow-line" /> YOUR TEAM, YOUR SPACE</div><h1>Make room for<br /><em>great work.</em></h1><p>Create a shared workspace or accept an invitation.</p></div><div className="banner-illustration" aria-hidden="true"><div className="orb orb-large" /><div className="orb orb-small" /><div className="banner-card banner-card-main"><div className="banner-card-top"><span className="mini-avatar avatar-lilac">S</span><span><b>general</b><small># your first channel</small></span><span className="card-check">✓</span></div><div className="banner-card-lines"><i /><i /><i /></div></div></div></div>
-            <div id="workspace-setup" className="starter-card setup-panel"><h2>Create a workspace</h2><p>Sign in with the dedicated workspace identity that will own its spaces and authority records.</p>
-              <button className="text-button" type="button" onClick={() => { sessionStorage.setItem("spaces.pendingWorkspaceName", workspaceName); void grant("workspaceAuthority"); }}>Authorize workspace setup</button>
-              <form className="inline-form" onSubmit={createWorkspace}><label htmlFor="workspace-name">Workspace name</label><input id="workspace-name" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} required maxLength={60} /><button className="primary-button" disabled={busy}>Create workspace</button></form>
-            </div>
-            <div className="starter-card setup-panel"><h2>Accept an invitation</h2><p>Paste the workspace URI shared by an admin. Membership remains enforced by the PDS.</p><form className="inline-form" onSubmit={beginAccept}><label htmlFor="workspace-uri">Workspace URI</label><input id="workspace-uri" value={inviteUri} onChange={(event) => setInviteUri(event.target.value)} placeholder="at://did:.../space/org.slack.workspace/key" required /><button className="primary-button" disabled={busy}>Connect invitation</button></form></div>
-          </>}
-          {activeWorkspace && (!activeChannel || activeChannel.workspace !== activeUri) && <>
-            <div className="welcome-banner"><div><div className="eyebrow"><span className="eyebrow-line" /> WORKSPACE HOME</div><h1>{activeWorkspace.name}</h1><p>{activeWorkspace.members.length} active members · {activeWorkspace.channels.length} channels</p><p className="mono-note">{activeWorkspace.uri}</p><button className="text-button" onClick={() => void navigator.clipboard.writeText(activeWorkspace.uri).then(() => setStatus("Workspace URI copied."), () => setError("Could not copy the workspace URI."))}>Copy workspace URI</button></div><div className="banner-illustration"><div className="banner-card banner-card-main"><b>Workspace data</b><p>Authority: {activeWorkspace.authorityDid}</p><p>Directory and membership are read from AT Protocol spaces.</p></div></div></div>
-            {activeWorkspace.isAdmin && <><div className="section-heading"><div><span className="eyebrow">GETTING STARTED</span><h2>Workspace controls</h2></div></div>
-            <div className="starter-grid"><article className="starter-card"><span className="starter-icon icon-violet">＋</span><h3>Invite a member</h3><p>Add their DID to workspace, inbox, and public-channel membership.</p><form onSubmit={(event) => { event.preventDefault(); void runOperation({ kind: "inviteMember", subject: inviteDid }); setInviteDid(""); }}><input aria-label="Member DID" value={inviteDid} onChange={(event) => setInviteDid(event.target.value)} placeholder="did:plc:…" required /><button className="text-button" disabled={busy || workspaceDegraded}>Invite member →</button></form></article>
-              <article className="starter-card"><span className="starter-icon icon-mint">#</span><h3>Create a channel</h3><p>Membership is applied before the directory entry becomes visible.</p><form onSubmit={(event) => { event.preventDefault(); const skey = `${toSlug(channelName)}-${makeShortId()}`; const members = privateMembers.split(/[\s,]+/).filter(Boolean); void runOperation({ kind: "createChannel", skey, name: channelName, visibility: channelVisibility, ...(channelVisibility === "private" ? { members } : {}) }); setChannelName(""); }}><input aria-label="Channel name" value={channelName} onChange={(event) => setChannelName(event.target.value)} placeholder="project-room" required /><select aria-label="Channel visibility" value={channelVisibility} onChange={(event) => setChannelVisibility(event.target.value as "public" | "private")}><option value="public">Public</option><option value="private">Private</option></select>{channelVisibility === "private" && <input aria-label="Private member DIDs" value={privateMembers} onChange={(event) => setPrivateMembers(event.target.value)} placeholder="Member DIDs, comma separated" /> }<button className="text-button" disabled={busy || workspaceDegraded}>Create channel →</button></form></article>
-              <article className="starter-card"><span className="starter-icon icon-peach">⚙</span><h3>Operator permissions</h3><p>Grant this admin identity the exact XRPC method scopes used for workspace changes.</p><button className="text-button" type="button" disabled={workspaceDegraded} onClick={() => void grant("operatorAdmin", activeWorkspace.uri)}>Grant admin controls →</button></article></div></>}
-            {did !== activeWorkspace.authorityDid && <div className="starter-card lifecycle-card"><h3>Leave workspace</h3><p>Leaving removes your workspace, inbox, public-channel, and private-channel memberships.</p><button className="text-button danger" disabled={busy || workspaceDegraded} onClick={() => void leaveWorkspace()}>Leave this workspace</button>{needOperatorLeave && <button className="text-button" disabled={workspaceDegraded} onClick={() => void grant("operatorLeave", activeWorkspace.uri)}>Authorize leave control →</button>}</div>}
-            {activeWorkspace.isAdmin && <>
-              <div className="section-heading"><div><span className="eyebrow">MEMBERS</span><h2>Current workspace roster</h2></div></div>
-              <div className="starter-card roster-list">{activeWorkspace.members.map((member) => <div className="roster-row" key={member.did}><span>{member.did}</span>{member.did !== activeWorkspace.authorityDid && <div><button className="text-button" disabled={workspaceDegraded} onClick={() => void runOperation({ kind: "setAdmin", subject: member.did, active: !activeWorkspace.admins.includes(member.did) })}>{activeWorkspace.admins.includes(member.did) ? "Demote admin" : "Make admin"}</button><button className="text-button danger" disabled={workspaceDegraded} onClick={() => void runOperation({ kind: "removeMember", subject: member.did })}>Remove</button></div>}</div>)}</div>
-              <div className="section-heading"><div><span className="eyebrow">PRIVATE CHANNEL INBOX</span><h2>Join requests</h2></div><button className="text-button" disabled={workspaceDegraded} onClick={() => { inboxPermissionMissingRef.current = false; setInboxPermissionMissing(false); setInboxLoaded(false); void loadInbox(); }}>Sync inbox ↻</button></div>
-              <div className="starter-card roster-list">{inbox.length === 0 ? <p>{inboxPermissionMissing ? <>Grant operator controls to sync private-channel requests. <button className="text-button" onClick={() => void grant("operatorAdmin", activeWorkspace.uri)}>Grant admin controls →</button></> : inboxLoaded ? "No pending join requests." : "Inbox has not been synced yet."}</p> : inbox.map((joinRequest) => <div className="roster-row" key={joinRequest.uri}><span>{joinRequest.repoDid} requested #{joinRequest.channelName}</span><div><button className="text-button" onClick={() => void runOperation({ kind: "decideJoinRequest", request: joinRequest.uri, requestId: joinRequest.requestId, decision: "approve" })}>Approve</button><button className="text-button danger" onClick={() => void runOperation({ kind: "decideJoinRequest", request: joinRequest.uri, requestId: joinRequest.requestId, decision: "deny" })}>Deny</button></div></div>)}</div>
-            </>}
-          </>}
-          {activeChannel?.workspace === activeUri && <>
-            <div className="section-heading"><div><span className="eyebrow">{activeChannel.visibility === "transitioning" ? "CHANNEL TRANSITION" : activeChannel.visibility === "private" ? "PRIVATE CHANNEL" : "PUBLIC CHANNEL"}</span><h2>{activeChannel.visibility === "private" ? "▣" : "#"} {activeChannel.name}</h2></div><div><button className="text-button" disabled={activeChannel.visibility === "transitioning"} onClick={() => void loadMessages(activeChannel).catch((caught) => setError(messageOf(caught)))}>Sync ↻</button>{activeWorkspace?.isAdmin && activeChannel.visibility !== "transitioning" && <><button className="text-button" disabled={workspaceDegraded} onClick={() => { const members = transitionMembers.split(/[\s,]+/).filter(Boolean); void runOperation({ kind: "transitionChannel", skey: activeChannel.skey, visibility: activeChannel.visibility === "public" ? "private" : "public", ...(activeChannel.visibility === "public" ? { members: members.length ? members : activeWorkspace.members.map((member) => member.did) } : {}) }); }}>{activeChannel.visibility === "public" ? "Make private" : "Make public"}</button><button className="text-button danger" disabled={workspaceDegraded} onClick={() => void runOperation({ kind: "archiveChannel", skey: activeChannel.skey })}>Archive</button></>}</div></div>
-            {activeChannel.visibility === "transitioning" && <p className="status-note">This channel is transitioning. Sync and posting are paused until its access changes finish.</p>}
-            {activeChannel.visibility === "private" && privateRoster.length > 0 && <div className="starter-card private-roster"><strong>Active private channel members</strong><p>{privateRoster.join(" · ")}</p></div>}
-            {activeWorkspace?.isAdmin && <label className="transition-members">Selected members when making this channel private<input value={transitionMembers} onChange={(event) => setTransitionMembers(event.target.value)} placeholder="DIDs separated by spaces or commas (blank keeps all)" /></label>}
-            {activeChannel.visibility === "private" && privateRoster.includes(did) && did !== activeWorkspace?.authorityDid && <div className="channel-lifecycle"><button className="text-button danger" disabled={busy || workspaceDegraded} onClick={() => void leaveChannel()}>Leave private channel</button>{needOperatorLeave && <button className="text-button" disabled={workspaceDegraded} onClick={() => void grant("operatorLeave", activeChannel.workspace)}>Authorize leave control →</button>}</div>}
-            {activeChannel.visibility === "private" && !privateRoster.includes(did) && <div className="starter-card permission-box"><p>You are not on this channel’s active roster.</p><button className="text-button" onClick={() => void requestPrivateAccess()}>{requestSubmitted ? "Update request →" : "Request private access →"}</button><button className="text-button danger" onClick={() => void requestPrivateAccess(true)}>Withdraw request</button></div>}
-            {needChannelRead && <div className="starter-card permission-box"><p>Grant workspace/channel read scope. A private-channel PDS membership check still applies.</p><button className="text-button" onClick={() => void authorizeCurrentChannel("channelRead")}>Grant channel read →</button>{activeChannel.visibility === "private" && <button className="text-button" onClick={() => void requestPrivateAccess()}>Request private access →</button>}</div>}
-            {needJoinWrite && <div className="starter-card permission-box"><p>Grant write-only inbox access to submit a private-channel request.</p><button className="text-button" onClick={() => void authorizeCurrentChannel("requestJoin")}>Grant request access →</button></div>}
-            {needChannelWrite && <div className="starter-card permission-box"><p>Grant message/reaction write access for this channel.</p><button className="text-button" onClick={() => void authorizeCurrentChannel("channelWrite")}>Grant message posting →</button></div>}
-            <div className="message-list">{messages.map((message) => <article className="message-card" key={message.uri}><div className="message-meta"><strong>{message.repo.slice(0, 20)}…</strong><time>{message.value.createdAt}</time></div><p>{message.value.text}</p>{message.value.parent && <small>Reply to {message.value.parent}</small>}<div className="message-actions"><button onClick={() => setReplyTo(message.uri)}>Reply</button>{(message.reactions ?? []).map((reaction) => <button className={reaction.active ? "reaction-active" : ""} key={reaction.emoji} onClick={() => void toggleReaction(message.uri, reaction.emoji, reaction.active)}>{reaction.emoji} {reaction.count}</button>)}{!(message.reactions ?? []).some((reaction) => reaction.emoji === "💜") && <button onClick={() => void toggleReaction(message.uri, "💜", false)}>💜 0</button>}{message.repo === did && <><button onClick={() => void editMessage(message)}>Edit</button><button onClick={() => void deleteMessage(message.uri)}>Delete</button></>}</div></article>)}</div>
-            {hasMore && <button className="text-button load-older" onClick={() => void loadMessages(activeChannel, nextOffset, true).catch((caught) => setError(messageOf(caught)))}>Load older messages</button>}
-            <form className="message-compose" onSubmit={sendMessage}>{replyTo && <p>Replying to {replyTo} <button type="button" onClick={() => setReplyTo("")}>Cancel</button></p>}<textarea disabled={activeChannel.visibility === "transitioning"} value={messageText} onChange={(event) => setMessageText(Array.from(event.target.value).slice(0, 10_000).join(""))} placeholder="Write a message…" required /><div><small>{Array.from(messageText).length}/10,000</small><button className="primary-button" disabled={busy || activeChannel.visibility === "transitioning"}>Send</button></div></form>
-          </>}
+          {!activeWorkspace && <WorkspaceOnboarding busy={busy} workspaceName={workspaceName} setWorkspaceName={setWorkspaceName} inviteUri={inviteUri} setInviteUri={setInviteUri} createWorkspace={createWorkspace} beginAccept={beginAccept} grant={grant} />}
+          {activeWorkspace && (!activeChannel || activeChannel.workspace !== activeUri) && <WorkspaceHome did={did} activeWorkspace={activeWorkspace} busy={busy} workspaceDegraded={workspaceDegraded} needOperatorLeave={needOperatorLeave} inbox={inbox} inboxLoaded={inboxLoaded} inboxPermissionMissing={inboxPermissionMissing} runOperation={runOperation} grant={grant} leaveWorkspace={leaveWorkspace} syncInbox={syncInbox} setStatus={setStatus} setError={setError} />}
+          {activeChannel?.workspace === activeUri && <ChannelView did={did} activeChannel={activeChannel} activeWorkspace={activeWorkspace} busy={busy} workspaceDegraded={workspaceDegraded} needOperatorLeave={needOperatorLeave} needChannelRead={needChannelRead} needChannelWrite={needChannelWrite} needJoinWrite={needJoinWrite} requestSubmitted={requestSubmitted} privateRoster={privateRoster} messages={messages} hasMore={hasMore} nextOffset={nextOffset} messageText={messageText} setMessageText={setMessageText} replyTo={replyTo} setReplyTo={setReplyTo} loadMessages={loadMessages} runOperation={runOperation} grant={grant} leaveChannel={leaveChannel} requestPrivateAccess={requestPrivateAccess} authorizeCurrentChannel={authorizeCurrentChannel} sendMessage={sendMessage} toggleReaction={toggleReaction} editMessage={editMessage} deleteMessage={deleteMessage} setError={setError} />}
           <div className="data-note"><span className="note-icon">◈</span><span><strong>Your conversations belong to you.</strong><small>Records remain in their authors’ AT Protocol accounts. Workspace access is enforced by PDS member lists.</small></span><a href="https://atproto.com" target="_blank" rel="noreferrer">How it works ↗</a></div>
         </div>
       </section>
@@ -643,28 +586,3 @@ export function WorkspaceManager({ did }: { did: string }) {
 
 }
 
-async function api<T = unknown>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers }, cache: "no-store" });
-  const body = await response.json().catch(() => null) as (T & { error?: string }) | null;
-  if (!response.ok) throw new ApiError(response.status, body && typeof body.error === "string" ? body.error : `Request failed (${response.status}).`);
-  return body as T;
-}
-
-class ApiError extends Error { constructor(readonly status: number, message: string) { super(message); } }
-function httpStatus(error: unknown): number | undefined { return error instanceof ApiError ? error.status : undefined; }
-function messageOf(error: unknown): string { return error instanceof Error ? error.message : "Request failed."; }
-function parseWorkspaceUri(uri: string): { authorityDid: string; skey: string } | null {
-  const match = /^at:\/\/(did:[^/]+)\/space\/org\.slack\.workspace\/([A-Za-z0-9._~:-]{1,128})$/.exec(uri.trim());
-  return match ? { authorityDid: match[1], skey: match[2] } : null;
-}
-function makeTid(): string {
-  const random = new Uint16Array(1);
-  crypto.getRandomValues(random);
-  let value = (BigInt(Date.now()) * 1000n << 10n) | BigInt(random[0] & 1023);
-  const alphabet = "234567abcdefghijklmnopqrstuvwxyz";
-  let result = "";
-  for (let index = 0; index < 13; index += 1) { result = alphabet[Number(value & 31n)] + result; value >>= 5n; }
-  return result;
-}
-function makeShortId(): string { return makeTid().slice(-5); }
-function toSlug(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50) || "channel"; }

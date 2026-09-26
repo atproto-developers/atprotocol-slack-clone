@@ -8,6 +8,7 @@ import { registerSpaceNotifications } from "@/atproto/notifications";
 import { channelUri } from "@/protocol/keys";
 import { validateSpaceRecord } from "@/protocol/records";
 import { purgeCachesForUnlistedWorkspaces, purgeWorkspaceCache, replaceWorkspaceChannels } from "./cache";
+import { mapLimited } from "@/lib/map-limited";
 
 export type WorkspaceSummary = {
   uri: string;
@@ -70,19 +71,6 @@ export async function discoverWorkspaceState(session: OAuthSession): Promise<Wor
     workspaces: results.flatMap(({ summary }) => summary ? [summary] : []).sort((left, right) => left.name.localeCompare(right.name)),
     candidates: results.flatMap(({ candidate }) => candidate ? [candidate] : []).sort((left, right) => left.uri.localeCompare(right.uri)),
   };
-}
-
-async function mapLimited<T, R>(values: readonly T[], concurrency: number, run: (value: T) => Promise<R>): Promise<R[]> {
-  const output = new Array<R>(values.length);
-  let nextIndex = 0;
-  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-    for (;;) {
-      const index = nextIndex++;
-      if (index >= values.length) return;
-      output[index] = await run(values[index]);
-    }
-  }));
-  return output;
 }
 
 export async function requireWorkspaceSummary(session: OAuthSession, uri: string): Promise<WorkspaceSummary> {

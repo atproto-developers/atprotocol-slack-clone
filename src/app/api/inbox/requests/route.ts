@@ -11,6 +11,7 @@ import { fetchInboxWriters } from "@/operator/client";
 import { channelUri, decisionRecordKey, inboxUri, requestRecordKey, spaceRecordUri } from "@/protocol/keys";
 import { validateSpaceRecord } from "@/protocol/records";
 import { requireWorkspaceSummary, WorkspaceEnvelopeError, workspaceDegradedMessage } from "@/workspaces/read-model";
+import { mapLimited } from "@/lib/map-limited";
 
 export const runtime = "nodejs";
 
@@ -85,17 +86,4 @@ export async function GET(request: NextRequest) {
     const status = message === "Unauthorized" ? 401 : error && typeof error === "object" && "status" in error && typeof error.status === "number" ? error.status : 400;
     return NextResponse.json({ error: message.slice(0, 500) }, { status, headers: { "cache-control": "no-store" } });
   }
-}
-
-async function mapLimited<T, R>(items: T[], concurrency: number, action: (item: T) => Promise<R>): Promise<R[]> {
-  const result = new Array<R>(items.length);
-  let index = 0;
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (true) {
-      const current = index++;
-      if (current >= items.length) return;
-      result[current] = await action(items[current]);
-    }
-  }));
-  return result;
 }

@@ -264,6 +264,10 @@ export function auditOperatorRead(actor: OperatorActor, event: string, details: 
   audit(actor, "", event, details);
 }
 
+export function auditOperationEvent(actor: OperatorActor, operationId: string, event: string, details: Record<string, unknown>): void {
+  audit(actor, operationId, event, details);
+}
+
 function operationView(operationId: string, requestHash: string, state: OperationState, steps: string[], error: string | null | undefined, updatedAt: number): OperationView {
   return {
     operationId,
