@@ -10,6 +10,7 @@ import {
   dmInboxUri,
   parseDmConversationUri,
   parseSpaceRecordUri,
+  parseSpaceUri,
   reactionRecordKey,
   recordKeyHash,
   requestDigest,
@@ -40,6 +41,27 @@ test("stable hashes use UTF-8 SHA-256 and lowercase unpadded base32", () => {
   });
   assert.equal(parseSpaceRecordUri("at://did:plc:alice/org.slack.channel.message/abc", "at://did:plc:owner/space/org.slack.channel/general", "org.slack.channel.message"), null);
   assert.equal(parseSpaceRecordUri(messageUri, "at://did:plc:owner/space/org.slack.channel/other", "org.slack.channel.message"), null);
+});
+
+test("hash outputs are byte-identical to the fixed vectors from the pre-WebCrypto node:crypto implementation", () => {
+  assert.equal(stableHash(""), "4oymiquy7qobjgx36tejs35zeqt24qpemsnzgtfeswmrw6csxbkq");
+  assert.equal(stableHash("hello world"), "xfgspomtju7arjjokll5u7nl7lcij37dpjjyb3uqrd32zyxpzxuq");
+  assert.equal(requestDigest({ a: 1, b: 2 }), "43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777");
+  assert.equal(requestDigest("hello world"), "9ddefe4435b21d901439e546d54a14a175a3493b9fd8fbf38d9ea6d3cbf70826");
+  assert.equal(requestDigest([1, 2, 3]), "a615eeaee21de5179de080de8c3052c8da901138406ba71c38c032845f7d54f4");
+});
+
+test("parseSpaceUri extracts the authority, type, and skey and rejects malformed or non-DID authorities", () => {
+  assert.deepEqual(parseSpaceUri("at://did:plc:owner/space/org.slack.channel/general"), {
+    authorityDid: "did:plc:owner", type: "org.slack.channel", skey: "general",
+  });
+  assert.deepEqual(parseSpaceUri("at://did:plc:alice/space/org.slack.dm.inbox/self"), {
+    authorityDid: "did:plc:alice", type: "org.slack.dm.inbox", skey: "self",
+  });
+  assert.equal(parseSpaceUri("not-a-uri"), null);
+  assert.equal(parseSpaceUri("at://alice/space/org.slack.channel/general"), null);
+  assert.equal(parseSpaceUri("at://did:plc:owner/org.slack.channel/general"), null);
+  assert.equal(parseSpaceUri("at://did:plc:owner/space/org.slack.channel/general/extra"), null);
 });
 
 test("canonical JSON sorts keys and rejects values outside its JSON domain", () => {

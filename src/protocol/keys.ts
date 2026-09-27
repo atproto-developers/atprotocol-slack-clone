@@ -1,4 +1,5 @@
-import { createHash, randomInt } from "node:crypto";
+import { sha256 } from "@noble/hashes/sha2";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils";
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const TID_BASE32 = "234567abcdefghijklmnopqrstuvwxyz";
@@ -18,8 +19,7 @@ export function isDid(value: unknown): value is string {
 }
 
 export function stableHash(value: string): string {
-  const digest = createHash("sha256").update(value, "utf8").digest();
-  return base32(digest);
+  return base32(sha256(utf8ToBytes(value)));
 }
 
 export function recordKeyHash(value: string): string {
@@ -86,6 +86,15 @@ export function canonicalParticipants(dids: readonly string[]): string[] {
   return unique;
 }
 
+const SPACE_URI_PATTERN = /^at:\/\/(did:[^/\s]+)\/space\/([A-Za-z0-9.-]+)\/([A-Za-z0-9._~:-]{1,128})$/;
+
+export function parseSpaceUri(uri: string): { authorityDid: string; type: string; skey: string } | null {
+  const match = SPACE_URI_PATTERN.exec(uri);
+  if (!match) return null;
+  const [, authorityDid, type, skey] = match;
+  return isDid(authorityDid) ? { authorityDid, type, skey } : null;
+}
+
 export function spaceRecordUri(spaceUri: string, repoDid: string, collection: string, rkey: string): string {
   if (!/^at:\/\/did:[^/\s]+\/space\/[A-Za-z0-9.-]+\/[A-Za-z0-9._~:-]{1,128}$/.test(spaceUri) ||
     !/^did:[^/\s]+$/.test(repoDid) || !/^[A-Za-z0-9.-]+$/.test(collection) || !/^[A-Za-z0-9._~:-]+$/.test(rkey)) {
@@ -130,7 +139,7 @@ export function canonicalJson(value: unknown): string {
 }
 
 export function requestDigest(value: unknown): string {
-  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+  return bytesToHex(sha256(utf8ToBytes(canonicalJson(value))));
 }
 
 function joinParts(...parts: string[]): string {
@@ -178,5 +187,14 @@ function canonicalValue(value: unknown): string {
 }
 
 function randomClockId(): number {
-  return randomInt(1024);
+  return randomUint(1024);
+}
+
+function randomUint(exclusiveMax: number): number {
+  const limit = Math.floor(0x100000000 / exclusiveMax) * exclusiveMax;
+  let value: number;
+  do {
+    value = crypto.getRandomValues(new Uint32Array(1))[0];
+  } while (value >= limit);
+  return value % exclusiveMax;
 }

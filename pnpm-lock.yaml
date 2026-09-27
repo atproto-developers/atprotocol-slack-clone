@@ -41,6 +41,9 @@ importers:
       '@next/env':
         specifier: 16.3.6
         version: 16.3.6
+      '@noble/hashes':
+        specifier: 1.8.0
+        version: 1.8.0
       better-sqlite3:
         specifier: 12.6.0
         version: 12.6.0
