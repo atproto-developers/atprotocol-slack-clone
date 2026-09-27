@@ -13,6 +13,17 @@ const ISOMORPHIC_PROTOCOL_MODULES = [
   "src/protocol/records.ts",
   "src/atproto/valid-channel-messages.ts",
 ];
+// Test files for the above run under Node's own test runner (`node --test`),
+// so they need `node:*` imports even though the modules they exercise must
+// stay browser-safe. They still may not reach into server-only app layers.
+const ISOMORPHIC_PROTOCOL_TEST_FILES = ["src/dm/**/*.test.{ts,tsx}"];
+const APP_LAYER_BOUNDARY = {
+  group: [
+    "@/lib/db", "@/lib/config", "@/auth/*", "@/operator/*", "@/workspaces/*",
+    "@atproto/oauth-client-node", "undici", "@/atproto/identity",
+  ],
+  message: "Isomorphic DM/protocol modules must not depend on the server-only session, database, or SSRF-guarded fetch layer.",
+};
 
 export default defineConfig([
   ...nextVitals,
@@ -20,6 +31,7 @@ export default defineConfig([
   globalIgnores([".next/**", "src/lexicons/api/**", "next-env.d.ts"]),
   {
     files: ISOMORPHIC_PROTOCOL_MODULES,
+    ignores: ISOMORPHIC_PROTOCOL_TEST_FILES,
     rules: {
       "no-restricted-imports": ["error", {
         patterns: [
@@ -27,15 +39,15 @@ export default defineConfig([
             group: ["node:*"],
             message: "Isomorphic DM/protocol modules must run in the browser and cannot import Node built-ins.",
           },
-          {
-            group: [
-              "@/lib/db", "@/lib/config", "@/auth/*", "@/operator/*", "@/workspaces/*",
-              "@atproto/oauth-client-node", "undici", "@/atproto/identity",
-            ],
-            message: "Isomorphic DM/protocol modules must not depend on the server-only session, database, or SSRF-guarded fetch layer.",
-          },
+          APP_LAYER_BOUNDARY,
         ],
       }],
+    },
+  },
+  {
+    files: ISOMORPHIC_PROTOCOL_TEST_FILES,
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [APP_LAYER_BOUNDARY] }],
     },
   },
 ]);

@@ -29,6 +29,7 @@
     "@atproto/lex-data": "0.1.7",
     "@atproto/lex-schema": "0.2.7",
     "@atproto/lexicon": "0.7.14",
+    "@atproto/oauth-client-browser": "0.5.7",
     "@atproto/oauth-client-node": "0.5.7",
     "@atproto/xrpc": "0.8.13",
     "@atproto/xrpc-server": "0.13.1",

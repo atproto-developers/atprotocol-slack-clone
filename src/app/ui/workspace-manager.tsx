@@ -6,11 +6,12 @@ import { api, httpStatus, isAccessFailure, makeTid, mergeMessages, messageOf, pa
 import { Sidebar } from "./sidebar";
 import { WorkspaceHome } from "./workspace-home";
 import { WorkspaceOnboarding } from "./workspace-onboarding";
+import type { DmConfig } from "@/dm/browser-session";
 import type { WorkspaceCandidate, WorkspaceSummary } from "@/workspaces/read-model";
 
 type RefreshSelectedChannel = (selected: ChannelSelection, reloadContent?: boolean) => Promise<void>;
 
-export function WorkspaceManager({ did }: { did: string }) {
+export function WorkspaceManager({ did, dmConfig }: { did: string; dmConfig: DmConfig }) {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [workspaceCandidates, setWorkspaceCandidates] = useState<WorkspaceCandidate[]>([]);
   const [inboxLoaded, setInboxLoaded] = useState(false);
@@ -540,7 +541,7 @@ export function WorkspaceManager({ did }: { did: string }) {
 
   return (
     <main className="app-frame">
-      <Sidebar did={did} workspaces={workspaces} workspaceCandidates={workspaceCandidates} activeUri={activeUri} activeWorkspace={activeWorkspace} activeChannel={activeChannel} switchWorkspace={switchWorkspace} openChannel={openChannel} grant={grant} setError={setError} />
+      <Sidebar did={did} dmConfig={dmConfig} workspaces={workspaces} workspaceCandidates={workspaceCandidates} activeUri={activeUri} activeWorkspace={activeWorkspace} activeChannel={activeChannel} switchWorkspace={switchWorkspace} openChannel={openChannel} grant={grant} setError={setError} />
       <section className="main-stage">
         <header className="topbar"><div className="breadcrumb">Your spaces <span>/</span> <strong>{activeChannel?.name ?? activeWorkspace?.name ?? "Overview"}</strong></div><div className="topbar-tools"><button className="help-button" onClick={() => void refreshWorkspaces().catch((caught) => setError(messageOf(caught)))}>↻ <span>Refresh</span></button><button className="top-avatar">{did.slice(-1).toUpperCase()}</button></div></header>
         <div className="overview-content">
