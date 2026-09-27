@@ -39,7 +39,7 @@ corepack pnpm@11.11.0 --filter @atproto/space build
 corepack pnpm@11.11.0 --filter @atproto/pds... --filter @atproto/dev-env... build
 ```
 
-Copy the two `protocol-tests/atproto/*.test.ts` files into `packages/pds/tests/space/`, run `corepack pnpm@11.11.0 --filter @atproto/space test`, then run:
+Copy the three `protocol-tests/atproto/*.test.ts` files into `packages/pds/tests/space/`, run `corepack pnpm@11.11.0 --filter @atproto/space test`, then run:
 
 ```sh
 NODE_OPTIONS=--experimental-vm-modules corepack pnpm@11.11.0 --filter @atproto/pds exec jest --watchman=false --runInBand \
@@ -48,7 +48,8 @@ NODE_OPTIONS=--experimental-vm-modules corepack pnpm@11.11.0 --filter @atproto/p
   tests/space/sync.test.ts \
   tests/space-scope.test.ts \
   tests/space/slack-inbox-conformance.test.ts \
-  tests/space/slack-authority-oauth-conformance.test.ts
+  tests/space/slack-authority-oauth-conformance.test.ts \
+  tests/space/slack-dm-conformance.test.ts
 ```
 
 The patched verification passed 101 `@atproto/space` tests and six PDS suites with 108 tests passing and one upstream `todo`. It exercised independent accounts on up to three in-memory PDS hosts; the custom expiry test rejects at `exp + 2s` on both PDS hosts. The custom tests and exact source patch are retained in this checkout; see [protocol test instructions](../../protocol-tests/atproto/README.md).
@@ -72,6 +73,24 @@ The retained multi-PDS inbox test creates an `org.slack.inbox` with member-list 
 The conformance test also drops the requester's PDS-to-authority DID notification. `listRepos` then omits the requester, while authority `listMembers` still reports `write=true`; the admin credential can directly read that repo. This proves the recovery API must query owner-authorized membership candidates instead of claiming that a writer-set-only sweep recovers every dropped notification.
 
 Membership removal prevents a fresh space credential. A default credential claims `exp - iat = 7200`. The unmodified pinned verifier uses `CLOCK_SKEW_SEC = 5` and accepts a credential after its `exp`. The checked-in overlay applies zero expiry skew only to space credentials; delegation tokens, client attestations, and DPoP proofs retain their five-second clock allowance. Unit tests prove the credential is rejected at `exp` and delegation skew remains accepted; the two-PDS conformance test proves a short-lived credential is rejected at `exp + 2s` on both hosts. Neither expiry nor removal can erase copies already downloaded.
+
+## Direct-message conformance (DM plan M0)
+
+Verified 2026-09-26 on the pinned commit plus overlay, Node 22.17.0. `slack-dm-conformance.test.ts` has 4 tests and all pass. Together with the two existing Slack suites, the result is 8/8 tests across 3 suites. The pnpm 11 build of the pinned checkout needs `npm_config_enable_pre_post_scripts=true` (otherwise package `prebuild` codegen is skipped) and `PUPPETEER_SKIP_DOWNLOAD=1`. `oauth-provider-ui`'s lingui codegen needs Node ≥ 24.2 (`import.meta.main`); on Node 22 it exits silently without generating locale files.
+
+| Check | Observed on the pinned PDS | Consequence for the DM design |
+|---|---|---|
+| Symmetric halves across hosts | Each participant's `memberList` half is readable by the others with a credential minted at the owner's host. `listRepos` shows only the owner | Confirmed |
+| Read-only member writes into a foreign half | `createRecord` **succeeds** (stored in the writer's own repo), but the authority never tracks it | Readers must reject half records whose repo is not the space owner |
+| Existence oracle | Non-member credential request: `UserNotAuthorized` for an existing space, `SpaceNotFound` for a missing one, `SpaceDeleted` after deletion | **Space existence is probeable.** Conversation keys must be unguessable random TIDs; the `self` inbox's existence is public by design |
+| Public-write inbox | A non-member on another host writes a request; the owner's `listRepos` lists them and the owner reads the record; the writer cannot get a read credential | Confirmed |
+| Policy switch `public` → `memberList` (`updateSpace`) | New non-listed writers are not tracked. Writers tracked earlier **stay listed** | Clients must filter requests by the current mode/allowlist |
+| Removing an allowlisted writer | The writer's later puts succeed on their PDS; they stay in `listRepos`, and the owner can still read their records | Same: allowlist enforcement for tracked writers is client-side |
+| Switch back to `public` | A previously ignored writer is tracked after their next write | Confirmed |
+| OAuth scopes (public client, `token_endpoint_auth_method: none`) | `space:org.slack.dm.inbox?authority=*&collection=org.slack.dm.request&action=create` allows request writes into another user's inbox and rejects other collections. `manage=create/update` on own conversation type allows `createSpace`/`putMember`. `authority=*&action=read` allows delegation tokens. A plain `atproto` token does none of these | Confirmed |
+| Browser DPoP | A non-extractable WebCrypto P-256 key signs access-token proofs, the credential exchange at another host, and credential-bound reads | Confirmed |
+| `removeMember` | Blocks new credentials for the revoker's half only | Confirmed |
+| 100 participants | 100 halves × 99 members: setup 27.5 s (100 `createSpace`, 9,900 `putMember`, 100 writes). One reader minted 100 credentials and read 100 halves in 1.2 s at concurrency 8. `listMembers` returns 99 | Confirmed on the fixture (rate limits disabled; not a production result) |
 
 ## OAuth scope proof
 

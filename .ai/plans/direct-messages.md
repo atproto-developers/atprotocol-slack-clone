@@ -1,6 +1,6 @@
 # Direct messages — implementation plan
 
-Status: **approved 2026-09-26; M0 in progress**.
+Status: **approved 2026-09-26; M0 passed 2026-09-26 (with the design adjustments in §6 M0 results); M1 next**.
 Protocol baseline: proposal 0016 draft, pinned PDS `787a730f` (see `docs/protocol/atproto-spaces-pin.md`).
 
 ## 1. Goal and the constraint that drives everything
@@ -136,6 +136,11 @@ Each milestone ends with the stated evidence recorded in `PROGRESS.md`. M0 is a 
 - (h) a member-list space accepts 100 members, and credential minting for 100 halves stays within PDS rate limits on the fixture.
 
 Exit: all pass, or the plan is revised.
+
+**M0 results (2026-09-26): passed.** Details are in `docs/protocol/atproto-spaces-pin.md` under "Direct-message conformance". All of (a), (c), (d), (e), (g) and (h) hold. Plan adjustments forced by what was observed:
+- **(b) fails: space existence is probeable** (`SpaceNotFound` vs `UserNotAuthorized`, plus `SpaceDeleted`). Random, unguessable conversation keys are now a hard requirement, not just a precaution. Inbox existence (`self`) remains public by design.
+- **(f): tightening the policy does not evict tracked writers**, and neither does removal from the allowlist. §3.6 enforcement is therefore split: the PDS stops *new* strangers, and the client **must** filter already-tracked writers against the current mode and allowlist, including in "Nobody" mode.
+- **Read-only members can store records scoped to someone else's half** in their own repo; the authority just never tracks them. The M1 validator rule "record repo == half owner" is now mandatory and gets a dedicated test.
 
 **M1 — Lexicons and validation.** Add the six lexicons, codegen, and record validators with unit tests (participant bounds 2–100, key rules, authority == repo, header/request equality). Add a BDD `features/direct-messages.feature` covering start, request, accept, read, edit/delete, leave, delete-all, group, each request-policy mode and mode switch, and the 100-participant bound.
 

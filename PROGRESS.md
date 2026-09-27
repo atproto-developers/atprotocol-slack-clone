@@ -28,6 +28,8 @@
 - Commands were run with Node 22.17.0 and pnpm 11.11.0.
 - The 2026-09-25 source security review identified vulnerable Next.js pins, missing app-level browser security headers, and cache ciphertext that was not authenticated against its SQLite row context. Next.js, `@next/env`, and `eslint-config-next` are now pinned to 16.3.6; `tsx` is 4.23.15; `pnpm audit` reports zero advisories. Channel cache values use AES-256-GCM additional authenticated data for account, space, repo, collection, rkey, and canonical AT URI. A one-time database migration purges old unbound cache ciphertext and its paging cursors. Global CSP, frame, referrer, content-type, HSTS, and permissions headers are configured. Backup files are created exclusively with owner-only POSIX permissions.
 
+- Direct-message plan M0 (2026-09-26): the new `slack-dm-conformance.test.ts` passed 4/4 on the pinned PDS plus overlay (8/8 together with the existing Slack suites). It proves cross-host symmetric conversation halves, public and allowlist inbox policies with `updateSpace` switching, wildcard-authority request scopes, browser-style public OAuth with non-extractable WebCrypto DPoP, and 100-participant conversations. It also shows that space existence is probeable and that tightening an inbox policy does not evict already-tracked writers; `.ai/plans/direct-messages.md` has been adjusted accordingly.
+
 ## Release gates not demonstrated here
 
 - Protocol expiry conformance passes at the strict cutoff on the checked-in PDS verifier overlay: credentials fail at `exp` in unit coverage and at `exp + 2s` on both PDS hosts. The unmodified pinned upstream commit still allows five seconds after `exp`, so deployment must include the overlay or a compatible upstream change.
