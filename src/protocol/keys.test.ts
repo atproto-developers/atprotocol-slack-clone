@@ -3,10 +3,15 @@ import test from "node:test";
 import {
   acceptanceRecordKey,
   canonicalJson,
+  canonicalParticipants,
   decisionRecordKey,
+  DM_INBOX_SKEY,
+  dmConversationUri,
+  dmInboxUri,
+  parseDmConversationUri,
   parseSpaceRecordUri,
-  recordKeyHash,
   reactionRecordKey,
+  recordKeyHash,
   requestDigest,
   requestRecordKey,
   spaceRecordUri,
@@ -51,4 +56,43 @@ test("TIDs use the protocol alphabet and are sortable by millisecond", () => {
   assert.match(first, /^[234567abcdefghijklmnopqrstuvwxyz]{13}$/);
   assert.ok(first < second);
   assert.notEqual(tidNow(1_700_000_000_000, 1), tidNow(1_700_000_000_000, 2));
+});
+
+test("DM inbox and conversation URIs are fixed-shape and reject invalid owners or keys", () => {
+  assert.equal(DM_INBOX_SKEY, "self");
+  assert.equal(dmInboxUri("did:plc:alice"), "at://did:plc:alice/space/org.slack.dm.inbox/self");
+  assert.throws(() => dmInboxUri("alice"), /Invalid DM inbox owner DID/);
+  const convKey = "2222222222222";
+  assert.equal(dmConversationUri("did:plc:alice", convKey), `at://did:plc:alice/space/org.slack.dm.conversation/${convKey}`);
+  assert.throws(() => dmConversationUri("alice", convKey), /Invalid DM conversation owner DID/);
+  assert.throws(() => dmConversationUri("did:plc:alice", "short"), /Invalid DM conversation key/);
+  assert.throws(() => dmConversationUri("did:plc:alice", "2222222222228"), /Invalid DM conversation key/);
+});
+
+test("DM conversation URIs parse strictly and reject other space shapes", () => {
+  const convKey = "234567abcdefg";
+  const uri = dmConversationUri("did:plc:alice", convKey);
+  assert.deepEqual(parseDmConversationUri(uri), { ownerDid: "did:plc:alice", convKey });
+  assert.equal(parseDmConversationUri(`at://did:plc:alice/space/org.slack.dm.conversation/${convKey}/did:plc:alice/org.slack.dm.message/${convKey}`), null);
+  assert.equal(parseDmConversationUri("at://did:plc:alice/space/org.slack.dm.inbox/self"), null);
+  assert.equal(parseDmConversationUri(`at://did:plc:alice/space/org.slack.dm.conversation/notatid`), null);
+  assert.equal(parseDmConversationUri(`at://alice/space/org.slack.dm.conversation/${convKey}`), null);
+  assert.equal(parseDmConversationUri(""), null);
+});
+
+test("canonical participants are sorted, deduplicated, and bounded to 2 through 100 DIDs", () => {
+  assert.deepEqual(canonicalParticipants(["did:plc:bob", "did:plc:alice", "did:plc:bob"]), ["did:plc:alice", "did:plc:bob"]);
+  const hundred = Array.from({ length: 100 }, (_, index) => `did:plc:user${index}`);
+  assert.deepEqual(canonicalParticipants([...hundred].reverse()), [...hundred].sort());
+  assert.throws(() => canonicalParticipants(["did:plc:alice"]), /2 to 100 unique DIDs/);
+  assert.throws(() => canonicalParticipants(["did:plc:alice", "did:plc:alice"]), /2 to 100 unique DIDs/);
+  assert.throws(() => canonicalParticipants(Array.from({ length: 101 }, (_, index) => `did:plc:user${index}`)), /2 to 100 unique DIDs/);
+  assert.throws(() => canonicalParticipants(["did:plc:alice", "alice"]), /Invalid DM participant DID/);
+});
+
+test("DM reaction keys reuse the channel reaction key scheme over the message URI", () => {
+  const half = dmConversationUri("did:plc:alice", "2222222222222");
+  const messageUri = spaceRecordUri(half, "did:plc:alice", "org.slack.dm.message", "2222222222223");
+  assert.equal(reactionRecordKey(messageUri, "💜", "did:plc:bob"),
+    `x-${recordKeyHash(`${messageUri}\u0000💜\u0000did:plc:bob`)}`);
 });

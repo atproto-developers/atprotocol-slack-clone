@@ -3,8 +3,18 @@ import { createHash, randomInt } from "node:crypto";
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const TID_BASE32 = "234567abcdefghijklmnopqrstuvwxyz";
 
+export const DM_INBOX_SKEY = "self";
+
 export function isSkey(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9._~:-]{1,128}$/.test(value);
+}
+
+export function isTid(value: unknown): value is string {
+  return typeof value === "string" && /^[234567abcdefghijklmnopqrstuvwxyz]{13}$/.test(value);
+}
+
+export function isDid(value: unknown): value is string {
+  return typeof value === "string" && /^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$/.test(value);
 }
 
 export function stableHash(value: string): string {
@@ -46,6 +56,34 @@ export function inboxUri(authorityDid: string, skey = "workspace"): string {
 
 export function channelUri(authorityDid: string, skey: string): string {
   return `at://${authorityDid}/space/org.slack.channel/${skey}`;
+}
+
+export function dmInboxUri(ownerDid: string): string {
+  if (!isDid(ownerDid)) throw new TypeError("Invalid DM inbox owner DID.");
+  return `at://${ownerDid}/space/org.slack.dm.inbox/${DM_INBOX_SKEY}`;
+}
+
+export function dmConversationUri(ownerDid: string, convKey: string): string {
+  if (!isDid(ownerDid)) throw new TypeError("Invalid DM conversation owner DID.");
+  if (!isTid(convKey)) throw new TypeError("Invalid DM conversation key.");
+  return `at://${ownerDid}/space/org.slack.dm.conversation/${convKey}`;
+}
+
+export function parseDmConversationUri(uri: string): { ownerDid: string; convKey: string } | null {
+  const match = /^at:\/\/(did:[^/\s]+)\/space\/org\.slack\.dm\.conversation\/([A-Za-z0-9._~:-]{1,128})$/.exec(uri);
+  if (!match) return null;
+  const [, ownerDid, convKey] = match;
+  if (!isDid(ownerDid) || !isTid(convKey)) return null;
+  return dmConversationUri(ownerDid, convKey) === uri ? { ownerDid, convKey } : null;
+}
+
+export function canonicalParticipants(dids: readonly string[]): string[] {
+  const unique = [...new Set(dids)].sort();
+  if (unique.length < 2 || unique.length > 100) {
+    throw new RangeError("DM participants must contain 2 to 100 unique DIDs.");
+  }
+  if (!unique.every(isDid)) throw new TypeError("Invalid DM participant DID.");
+  return unique;
 }
 
 export function spaceRecordUri(spaceUri: string, repoDid: string, collection: string, rkey: string): string {

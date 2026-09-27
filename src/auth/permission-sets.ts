@@ -7,6 +7,8 @@ export const SLACK_SPACE_TYPES = {
   workspace: "org.slack.workspace",
   inbox: "org.slack.inbox",
   channel: "org.slack.channel",
+  dmInbox: "org.slack.dm.inbox",
+  dmConversation: "org.slack.dm.conversation",
 } as const;
 
 export const SLACK_COLLECTIONS = {
@@ -20,6 +22,10 @@ export const SLACK_COLLECTIONS = {
   message: "org.slack.channel.message",
   reaction: "org.slack.channel.reaction",
   channelRoster: "org.slack.channel.roster",
+  dmRequest: "org.slack.dm.request",
+  dmHeader: "org.slack.dm.header",
+  dmMessage: "org.slack.dm.message",
+  dmReaction: "org.slack.dm.reaction",
 } as const;
 
 // listSpaces needs read_self across authorities before an invited user knows
