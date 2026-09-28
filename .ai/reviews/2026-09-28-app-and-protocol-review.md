@@ -26,7 +26,7 @@ The architecture holds. The DM invariants (no server DM scopes, no server DM con
 |---|---|---|---|
 | F5 | DM inbox stream not limited to its owner | App | **Fixed** |
 | F2 | One hostile sender blanks the DM list | Split | App part **fixed**; eviction is **U1** |
-| F1 | Future-dated keys pin messages to the top | Protocol | Open, no app stopgap; **U5** |
+| F1 | Future-dated keys pin messages to the top | Protocol | Interim rule tried and **backed out** (made it worse); real fix is **U5** |
 | F3 | Live updates reveal conversation membership to the server | Protocol | Open; **U2** |
 | F4 | One live connection per participant half | Protocol | Open; **U2** |
 | F6 | CSP allows inline scripts | App | Open |
@@ -56,7 +56,7 @@ The architecture holds. The DM invariants (no server DM scopes, no server DM con
 
 **F8. Service-auth tokens have no replay cache.** Tokens are accepted within a 75-second window without a `jti` check (`src/operator/security.ts`). Safe today because operations are idempotent by workspace, actor, operation id and request hash, and reads are read-only. A small cache would remove the reliance.
 
-**F9. Leftovers.** Two `window.prompt`/`window.confirm` calls in channel edit and delete (DMs use in-page forms), a stale `PLAN.md` with no DM entry, `test:acceptance` lacking `--test-concurrency=1` (the dev-env port-lock race showed up in the browser run), and `workspace-manager.tsx` still at 605 lines.
+**F9. Leftovers.** Two `window.prompt`/`window.confirm` calls in channel edit and delete (DMs use in-page forms), a stale `PLAN.md` with no DM entry, `test:acceptance` lacking `--test-concurrency=1` (the dev-env port-lock race showed up in the browser run), and `workspace-manager.tsx` still at 605 lines. Also a latent timing race in `protocol-tests/app-acceptance.test.ts` (around line 265): the "reply" message's key is `Date.now() - 100` taken after two network round trips, so if they take over 100 ms the reply sorts as the newest message and the assertion on the latest message fails. It failed once under concurrent CPU load and passed 3/3 on an idle re-run of the same tree.
 
 ---
 
@@ -69,9 +69,13 @@ Each item names the app finding it would resolve, the evidence, and the proposed
 **F1 → U5. Message ordering trusts the author.**
 - Evidence: `listRecords` returns `collection`, `rkey`, `cid`, `value` only. Readers sort by the author-chosen TID key (`src/dm/merge.ts`, `src/workspaces/channel-sync.ts`, `src/reader/independent-dm.ts`), and validation only checks the key's shape. A script using the real validator and merge showed a key 50 years ahead passes and a latest-4 page came back as 3 attacker messages and 1 honest one.
 - Impact: with 100 such records, the whole first page of a channel (up to 200 members) or a DM belongs to the attacker.
-- Why no app stopgap: a reader-side clock check would be replaced the moment the host assigns ordering, and any local "first seen" ordering needs extra state.
-- Interim exposure: needs a channel member or a DM participant, so it is griefing by an already-admitted account. Admins can remove a member; a DM participant can leave.
-- Decision needed if you want interim protection: a bounded reader-side rule ("key time no more than N minutes ahead of now"), applied to channels and DMs.
+- **Interim rule tried, then backed out (2026-09-28).** We implemented "readers ignore message keys dated more than 10 minutes ahead of their clock" for channels and DMs, with tests. An independent review of the diff found it converts pinning into something worse:
+  - DM reads: dropping future-keyed records after fetching them leaves the half looking unfinished, so the reader keeps paging through the attacker's pile. One participant with N such records forces about N divided by the page size sequential requests per read, and past 10,000 rounds the read throws, making the conversation unreadable.
+  - Server channel sync (`src/workspaces/channel-sync.ts`): the paging cutoff and the 20,000-record cap are computed from raw, unfiltered cached records, so an attacker's future-dated pile still forces every latest-page read to fetch and cache up to 20,000 records, and can fill the cap so honest messages are missing.
+  - Fixing both properly means new "skip the hostile prefix" paging logic in three places, and `listRecords` has no key-range or seek parameter (only an opaque cursor, `reverse` and `limit`), so a reader cannot jump past a hostile range and must page through it.
+  - The change was not committed. The patch was kept only in the session scratchpad.
+- Current exposure: pinning only. It needs a channel member or a DM participant, so it is griefing by an already-admitted account. Admins can remove a member; a DM participant can leave.
+- This strengthens U5: the fix needs a host-assigned ordering value **and** a way to seek or bound a `listRecords` range.
 
 **F3, F4 → U2. Live updates need a relay that sees who follows what.**
 - Evidence: `registerNotify` needs a service endpoint, so a browser-only client must relay through the app server. `dm-conversation.tsx:46-63` opens one `EventSource` per existing half of the open conversation plus the user's inbox, each authenticated with the server session. The server can log which halves, and so which participants, a signed-in user follows. `docs/operations.md` discloses the database side (`repo_did` in `space_notification`) but not this. A 100-person group opens about 101 connections, each polling SQLite every second.
@@ -88,11 +92,11 @@ Each item names the app finding it would resolve, the evidence, and the proposed
 
 **U2. Client-direct change subscription (high).** A stream on the repo host and space host, authenticated by a space credential, with a resume cursor. It fits the proposal's stance: it is `listRepoOps` as a stream, not a relay.
 
-**U3. Member-readable roster, opt-in (high).** `listMembers` is owner-only by design (proposal, access section). We built shadow roster records plus a reconciliation operator with 52 tested failure boundaries because members cannot see membership. Ask for a per-space option letting credential holders list members (at least the write-capable ones). It would also let admins recover writers whose write notification was dropped without an operator.
+**U3. Member-readable roster, opt-in (high).** `listMembers` needs OAuth with a read grant on the authority's own PDS, and a space credential is explicitly not enough (lexicon), so members hosted elsewhere cannot list it; the proposal also says readers are never enumerated at the protocol level. We built shadow roster records plus a reconciliation operator (tested at 52 injected failure boundaries) because members cannot see membership. Ask for a per-space option letting credential holders list members (at least the write-capable ones). It would also let admins recover writers whose write notification was dropped without an operator.
 
 **U4. Delegated space management (high).** The operator stores the workspace DID's OAuth session to run `putMember`/`removeMember`. The proposal's `managing-app` policy decides read and write access, not management, and using it would put the app in the read gate. Ask that an owner can delegate `manage` to other DIDs (or accept a scoped service-auth token) so admin actions need no custody of the owner's session.
 
-**U5. Host-assigned per-record `rev` (medium).** Include the commit `rev` that last wrote each record in `listRecords`/`getRecord`, and state a minimum retention for the `listRepoOps` `since` log so incremental sync can rely on it.
+**U5. Host-assigned per-record `rev` and a range bound (medium).** Include the commit `rev` that last wrote each record in `listRecords`/`getRecord`, add a way to seek or bound a `listRecords` range (by key or by `rev`), and state a minimum retention for the `listRepoOps` `since` log so incremental sync can rely on it. The range bound matters because a reader-side rule against hostile keys needs it: without it a reader must page through the hostile range.
 
 **U6. Holder-aware credential revocation (medium).** A credential carries no holder identity, so a removed member keeps read access until expiry (up to 2 hours), and the pinned PDS accepted credentials 5 seconds past `exp`, which forced our overlay patch. Ask for strict expiry as normative, a per-space credential lifetime, and a membership-epoch claim that repo hosts can check.
 
