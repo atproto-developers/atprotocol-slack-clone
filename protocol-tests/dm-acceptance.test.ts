@@ -5,7 +5,8 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { JoseKey } from "@atproto/jwk-jose";
 import { AtprotoClient } from "@/atproto/xrpc";
-import { DmClient, type DmDeps, type DmStore } from "@/dm/dm-client";
+import { DmClient, type DmConversationPage, type DmDeps, type DmStore } from "@/dm/dm-client";
+import { readIndependentDmConversation } from "@/reader/independent-dm";
 import { createFixtureTempRoot } from "./fixture-temp";
 
 // Backend acceptance for M4 (.ai/plans/dm-tasks/m4.md) against the pinned PDS
@@ -14,6 +15,13 @@ import { createFixtureTempRoot } from "./fixture-temp";
 // engine's isomorphic boundary forbids it), so `DATABASE_PATH` is set to a
 // path under a directory that is asserted, at the end, to never have been
 // created.
+//
+// M6 (.ai/plans/dm-tasks/m6.md) parity: after the 1:1 and group flows below,
+// `assertDmParity` re-reads the same conversation through the independent
+// reader (`src/reader/independent-dm.ts`, which imports nothing from
+// `src/dm/`) using the same acting identity as the `DmClient` read it is
+// compared against, and asserts identical message URIs/texts, reactions, and
+// per-half statuses.
 
 type TestAgent = {
   com: { atproto: { server: {
@@ -80,6 +88,14 @@ test("DM acceptance: 1:1, group, dropped-notification recovery, all with the ser
 
     const dmFor = (actor: Actor, now?: () => number): DmClient => new DmClient(depsFor(actor, now));
 
+    const byUri = <T extends { uri: string }>(records: readonly T[]): Record<string, T> => Object.fromEntries(records.map((record) => [record.uri, record]));
+    const assertDmParity = async (actor: Actor, page: DmConversationPage, convKey: string, participants: readonly string[]): Promise<void> => {
+      const independent = await readIndependentDmConversation(depsFor(actor), convKey, participants);
+      assert.deepEqual(byUri(page.messages), byUri(independent.messages), "independent reader must render identical DM messages");
+      assert.deepEqual(byUri(page.reactions), byUri(independent.reactions), "independent reader must render identical DM reactions");
+      assert.deepEqual(page.halves, independent.halves, "independent reader must classify half status identically");
+    };
+
     // --- 1:1 ---
     const alice = await createActor(network.pds, "alice", "test");
     const bob = await createActor(network.extraPdses[0], "bob", "test2");
@@ -89,6 +105,10 @@ test("DM acceptance: 1:1, group, dropped-notification recovery, all with the ser
     await bobDm.enableDms("everyone");
     const started = await aliceDm.startConversation([bob.did]);
     assert.equal(started.delivery[bob.did]?.status, "delivered");
+
+    const beforeAccept = await aliceDm.readConversation(started.convKey, started.participants);
+    assert.equal(beforeAccept.halves[bob.did], "missing", "bob has not replied yet");
+    await assertDmParity(alice, beforeAccept, started.convKey, started.participants);
 
     assert.equal((await bobDm.listRequests()).length, 1, "bob sees alice's request under \"everyone\"");
 
@@ -118,12 +138,14 @@ test("DM acceptance: 1:1, group, dropped-notification recovery, all with the ser
     assert.deepEqual(merged.reactions.map((reaction) => ({ subject: reaction.subject, emoji: reaction.emoji })), [{ subject: aliceMessage.uri, emoji: "👍" }]);
     assert.equal(merged.halves[alice.did], "ok");
     assert.equal(merged.halves[bob.did], "ok");
+    await assertDmParity(alice, merged, started.convKey, started.participants);
 
     await bobDm.unreact(aliceMessage.uri, "👍");
     await bobDm.delete(bobMessage.uri);
     const afterEdits = await aliceDm.readConversation(started.convKey, started.participants);
     assert.deepEqual(afterEdits.reactions, []);
     assert.equal(afterEdits.messages.length, 1, "the deleted message is gone");
+    await assertDmParity(alice, afterEdits, started.convKey, started.participants);
 
     await bobDm.leave(started.convKey);
     // A credential minted before this point (by the `merged`/`afterEdits`
@@ -132,10 +154,12 @@ test("DM acceptance: 1:1, group, dropped-notification recovery, all with the ser
     // fresh client (no cached credential) observes the revocation immediately.
     const afterLeave = await dmFor(alice).readConversation(started.convKey, started.participants);
     assert.equal(afterLeave.halves[bob.did], "revoked", "leaving removes alice from bob's own half");
+    await assertDmParity(alice, afterLeave, started.convKey, started.participants);
 
     await aliceDm.deleteEverything(started.convKey);
     const afterDelete = await dmFor(bob).readConversation(started.convKey, started.participants);
     assert.equal(afterDelete.halves[alice.did], "deleted");
+    await assertDmParity(bob, afterDelete, started.convKey, started.participants);
 
     // --- 3-person group ---
     const carol = await createActor(network.pds, "carol", "test");
@@ -160,6 +184,7 @@ test("DM acceptance: 1:1, group, dropped-notification recovery, all with the ser
     assert.equal(groupPage.messages.length, 3);
     assert.deepEqual(new Set(groupPage.messages.map((message) => message.text)), new Set(["from carol", "from dave", "from erin"]));
     assert.deepEqual(groupPage.halves, { [carol.did]: "ok", [dave.did]: "ok", [erin.did]: "ok" });
+    await assertDmParity(carol, groupPage, group.convKey, group.participants);
 
     // --- Dormant allowlist members (nobody mode): real putMember(read:false,write:false) ---
     const heidi = await createActor(network.pds, "heidi", "test");
