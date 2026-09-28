@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DmClient, type DmDeps, type DmStore } from "./dm-client";
 import { FakeDmNetwork } from "./testing/fake-pds";
-import { applyAllowlistEdit, coMemberDids, conversationVisible, parseParticipantInput, sharesAnyWorkspace } from "./ui-logic";
+import { applyAllowlistEdit, coMemberDids, conversationVisible, describeSkippedSenders, parseParticipantInput, sharesAnyWorkspace } from "./ui-logic";
 
 function createStore(): DmStore {
   const map = new Map<string, string>();
@@ -118,4 +118,12 @@ test("applyAllowlistEdit removes entries and re-asserts nobody so nothing new is
   await alice.enableDms("allowlist", ["did:plc:bob"]);
   await applyAllowlistEdit(alice, { mode: "nobody", remove: ["did:plc:bob"] });
   assert.deepEqual(await alice.getInbox(), { exists: true, mode: "nobody", allowlist: [] });
+});
+
+test("describeSkippedSenders is empty when nothing was skipped and names each cause otherwise", () => {
+  assert.equal(describeSkippedSenders({ oversizedWriters: [], failedWriters: [], writerSetTruncated: false }), "");
+  assert.equal(
+    describeSkippedSenders({ oversizedWriters: ["did:plc:a"], failedWriters: [{ did: "did:plc:b", reason: "x" }, { did: "did:plc:c", reason: "y" }], writerSetTruncated: true }),
+    "Some senders were skipped: 1 sender sent too many requests; 2 senders could not be reached; more senders exist than could be scanned.",
+  );
 });

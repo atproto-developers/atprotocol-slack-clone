@@ -8,7 +8,7 @@ import type { DmClient, DmConversationSummary, DmInboxState, DmRequest } from "@
 import { resolveHandle } from "@/dm/browser-identity";
 import type { BrowserDmStore } from "@/dm/browser-store";
 import type { DmClientState, DmClientStatus } from "@/dm/use-dm-client";
-import { applyAllowlistEdit, coMemberDids, type UiWorkspace } from "@/dm/ui-logic";
+import { applyAllowlistEdit, coMemberDids, describeSkippedSenders, type UiWorkspace } from "@/dm/ui-logic";
 import { messageOf } from "./client-api";
 
 // `DmProvider` must keep rendering its non-DM children (`Sidebar`, the
@@ -44,6 +44,7 @@ export type DmContextValue = {
   disconnect: () => Promise<void>;
   conversations: DmConversationSummary[];
   requests: DmRequest[];
+  skippedNote: string;
   inbox: DmInboxState | null;
   labels: Readonly<Record<string, string>>;
   workspaces: UiWorkspace[];
@@ -87,6 +88,7 @@ export function DmProvider({ did, dmConfig, workspaces, activeWorkspace, view, o
   const { status, client, store, connect, disconnect } = session;
   const [conversations, setConversations] = useState<DmConversationSummary[]>([]);
   const [requests, setRequests] = useState<DmRequest[]>([]);
+  const [skippedNote, setSkippedNote] = useState("");
   const [inbox, setInbox] = useState<DmInboxState | null>(null);
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [showAll, setShowAll] = useState(false);
@@ -96,9 +98,10 @@ export function DmProvider({ did, dmConfig, workspaces, activeWorkspace, view, o
 
   const refresh = useCallback(async (): Promise<DmInboxState | null> => {
     if (!client) return null;
-    const [list, requestList, inboxState] = await Promise.all([client.listConversations(), client.listRequests(), client.getInbox()]);
-    setConversations(list.filter((entry) => !entry.pending));
-    setRequests(requestList);
+    const [list, scan, inboxState] = await Promise.all([client.listConversations(), client.scanRequests(), client.getInbox()]);
+    setConversations(list);
+    setRequests(scan.requests);
+    setSkippedNote(describeSkippedSenders(scan.skipped));
     setInbox(inboxState);
     return inboxState;
   }, [client]);
@@ -199,6 +202,7 @@ export function DmProvider({ did, dmConfig, workspaces, activeWorkspace, view, o
     disconnect,
     conversations: client ? conversations : [],
     requests: client ? requests : [],
+    skippedNote: client ? skippedNote : "",
     inbox: client ? inbox : null,
     labels,
     workspaces,
@@ -216,7 +220,7 @@ export function DmProvider({ did, dmConfig, workspaces, activeWorkspace, view, o
         setError(messageOf(caught));
       }
     },
-  }), [did, dmConfig, status, client, store, connect, disconnect, conversations, requests, inbox, labels, workspaces, activeWorkspace, showAll, view, openView, error, refresh]);
+  }), [did, dmConfig, status, client, store, connect, disconnect, conversations, requests, skippedNote, inbox, labels, workspaces, activeWorkspace, showAll, view, openView, error, refresh]);
 
   return (
     <DmContext.Provider value={value}>

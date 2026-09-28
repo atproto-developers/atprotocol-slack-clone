@@ -7,7 +7,7 @@ import { messageOf } from "./client-api";
 import { useDmContext } from "./dm-context";
 
 export function DmRequests() {
-  const { client, requests, workspaces, labels, openView, setError, refresh } = useDmContext();
+  const { client, requests, skippedNote, workspaces, labels, openView, setError, refresh } = useDmContext();
   const [busyUri, setBusyUri] = useState("");
   const shared = requests.filter((request) => sharesAnyWorkspace(request.sender, workspaces));
   const others = requests.filter((request) => !sharesAnyWorkspace(request.sender, workspaces));
@@ -44,6 +44,7 @@ export function DmRequests() {
       <div className="section-heading">
         <div><span className="eyebrow"><span className="eyebrow-line" /> DIRECT MESSAGE</span><h2>Requests</h2></div>
       </div>
+      {skippedNote && <p className="status-note" role="status">{skippedNote}</p>}
       <div className="starter-card">
         <h3>From people you share a workspace with</h3>
         <p>Accepting creates your half of the conversation and always allows the sender on your PDS.</p>

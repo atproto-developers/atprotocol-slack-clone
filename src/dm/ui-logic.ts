@@ -1,5 +1,5 @@
 import { isDid } from "@/protocol/keys";
-import type { DmClient, DmRequestMode } from "./dm-client";
+import type { DmClient, DmRequestMode, DmSkippedSenders } from "./dm-client";
 
 /** The workspace surface DM UI needs; `@/workspaces/*` stays server-only for `src/dm/**`. */
 export type UiWorkspace = { uri: string; name: string; members: ReadonlyArray<{ did: string; active: boolean }> };
@@ -72,4 +72,13 @@ export async function applyAllowlistEdit(client: DmClient, input: { mode: DmRequ
   if (input.add && input.add.length > 0) await client.allow(input.add);
   if (input.remove && input.remove.length > 0) await client.disallow(input.remove);
   await client.setRequestMode(input.mode);
+}
+
+export function describeSkippedSenders(skipped: DmSkippedSenders): string {
+  const senders = (count: number) => `${count} ${count === 1 ? "sender" : "senders"}`;
+  const reasons: string[] = [];
+  if (skipped.oversizedWriters.length > 0) reasons.push(`${senders(skipped.oversizedWriters.length)} sent too many requests`);
+  if (skipped.failedWriters.length > 0) reasons.push(`${senders(skipped.failedWriters.length)} could not be reached`);
+  if (skipped.writerSetTruncated) reasons.push("more senders exist than could be scanned");
+  return reasons.length > 0 ? `Some senders were skipped: ${reasons.join("; ")}.` : "";
 }

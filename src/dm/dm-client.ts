@@ -48,13 +48,21 @@ export type DmDeps = {
   generateKey(): Promise<DpopKey>;
   store: DmStore;
   now?: () => number;
+  limits?: { maxInboxScan?: number; maxRequestsPerWriter?: number };
 };
 
 export type DmInboxState = { exists: boolean; mode: DmRequestMode; allowlist: string[] };
 
 export type DmRequest = { convKey: string; participants: string[]; sender: string; createdAt: string; uri: string };
 
-export type DmConversationSummary = { convKey: string; participants: string[]; pending: boolean };
+export type DmConversationSummary = { convKey: string; participants: string[] };
+
+export type DmSkippedSenders = {
+  oversizedWriters: string[];
+  failedWriters: Array<{ did: string; reason: string }>;
+  writerSetTruncated: boolean;
+};
+export type DmRequestScan = { requests: DmRequest[]; skipped: DmSkippedSenders };
 
 export type DmDeliveryStatus = "delivered" | "noInbox" | "failed";
 export type DmDelivery = { status: DmDeliveryStatus; message?: string };
@@ -157,13 +165,25 @@ export class DmClient {
   // --- Discovery ---
 
   async listRequests(): Promise<DmRequest[]> {
+    return (await this.scanRequests()).requests;
+  }
+
+  /**
+   * One hostile sender must not take the whole inbox down: a sender with too many
+   * records, or whose host cannot be read, is skipped and reported instead. The
+   * PDS never evicts tracked writers, so the scan bounds are the only defense here.
+   */
+  async scanRequests(): Promise<DmRequestScan> {
     const inboxSpace = dmInboxUri(this.deps.did);
     const inbox = await this.inboxDetail();
-    if (!inbox.exists) return [];
+    const skipped: DmSkippedSenders = { oversizedWriters: [], failedWriters: [], writerSetTruncated: false };
+    if (!inbox.exists) return { requests: [], skipped };
+    const maxInboxScan = this.deps.limits?.maxInboxScan ?? MAX_INBOX_SCAN;
+    const maxRequestsPerWriter = this.deps.limits?.maxRequestsPerWriter ?? MAX_REQUESTS_PER_WRITER;
     const credential = await this.credentialFor(inboxSpace);
     const repoClient = credential.client(await this.deps.resolvePds(this.deps.did));
-    const writerScan = await listBoundedRepos(repoClient, { space: inboxSpace, maxRepos: MAX_INBOX_SCAN });
-    if (writerScan.truncated) throw new Error("DM inbox has more tracked writers than the bounded scan limit.");
+    const writerScan = await listBoundedRepos(repoClient, { space: inboxSpace, maxRepos: maxInboxScan });
+    skipped.writerSetTruncated = writerScan.truncated;
     const ownHalves = await this.ownConversationKeys();
 
     const perWriter = await mapLimited(writerScan.repos, FANOUT, async (repo): Promise<DmRequest[]> => {
@@ -172,11 +192,23 @@ export class DmClient {
       // A dormant ("nobody"-mode) member never counts as allowed here, only
       // an active one does.
       if (!isSenderAllowedUnderMode({ mode: inbox.mode, allowlist: inbox.activeAllowlist, senderDid: repo.did })) return [];
-      const writerClient = credential.client(await this.deps.resolvePds(repo.did));
-      const page = await listBoundedRecords(writerClient, {
-        space: inboxSpace, repo: repo.did, collection: "org.slack.dm.request", maxRecords: MAX_REQUESTS_PER_WRITER,
-      });
-      if (page.truncated) throw new Error("A DM inbox writer has more requests than the bounded scan limit.");
+      // Only the reads from the sender's own host may fail softly. Our inbox
+      // credential was proven by the writer listing above, so a per-sender 401
+      // or 403 is that sender's failure; store and validation errors propagate.
+      let page: Awaited<ReturnType<typeof listBoundedRecords>>;
+      try {
+        const writerClient = credential.client(await this.deps.resolvePds(repo.did));
+        page = await listBoundedRecords(writerClient, {
+          space: inboxSpace, repo: repo.did, collection: "org.slack.dm.request", maxRecords: maxRequestsPerWriter,
+        });
+      } catch (error) {
+        skipped.failedWriters.push({ did: repo.did, reason: error instanceof Error ? error.message.slice(0, 200) : "Unreadable sender." });
+        return [];
+      }
+      if (page.truncated) {
+        skipped.oversizedWriters.push(repo.did);
+        return [];
+      }
       const requests: DmRequest[] = [];
       for (const record of page.records) {
         const uri = spaceRecordUri(inboxSpace, repo.did, "org.slack.dm.request", record.rkey);
@@ -192,7 +224,7 @@ export class DmClient {
       }
       return requests;
     });
-    return perWriter.flat();
+    return { requests: perWriter.flat(), skipped };
   }
 
   async listConversations(): Promise<DmConversationSummary[]> {
@@ -203,15 +235,9 @@ export class DmClient {
       if (!parsed) return null;
       const header = await this.getValidatedOwnHeader(space.uri);
       if (!header) return null;
-      return { convKey: parsed.convKey, participants: header.participants, pending: false };
+      return { convKey: parsed.convKey, participants: header.participants };
     });
-
-    const merged = new Map<string, DmConversationSummary>();
-    for (const summary of own) if (summary) merged.set(summary.convKey, summary);
-    for (const request of await this.listRequests()) {
-      if (!merged.has(request.convKey)) merged.set(request.convKey, { convKey: request.convKey, participants: request.participants, pending: true });
-    }
-    return [...merged.values()];
+    return own.filter((summary): summary is DmConversationSummary => summary !== null);
   }
 
   // --- Starting and accepting ---

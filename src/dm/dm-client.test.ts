@@ -16,7 +16,7 @@ function createStore(): DmStore {
 function harness() {
   const network = new FakeDmNetwork();
   const clients = new Map<string, DmClient>();
-  const client = (did: string, host = "pds1"): DmClient => {
+  const client = (did: string, host = "pds1", overrides: Partial<DmDeps> = {}): DmClient => {
     let instance = clients.get(did);
     if (!instance) {
       if (!network.hasAccount(did)) network.createAccount(did, host);
@@ -28,6 +28,7 @@ function harness() {
         generateKey: network.generateKey,
         store: createStore(),
         now: () => network.now(),
+        ...overrides,
       };
       instance = new DmClient(deps);
       clients.set(did, instance);
@@ -192,7 +193,7 @@ test("accept creates the reader's own half, matches the header, and always allow
   assert.deepEqual((await bob.getInbox()).allowlist, ["did:plc:alice"], "accepting always allows the sender");
 
   const conversations = await bob.listConversations();
-  assert.deepEqual(conversations.map((c) => ({ convKey: c.convKey, pending: c.pending })), [{ convKey: started.convKey, pending: false }]);
+  assert.deepEqual(conversations.map((c) => c.convKey), [started.convKey]);
 });
 
 test("send, edit, delete, react and unreact validate locally and only touch the caller's own records", async () => {
@@ -310,5 +311,77 @@ test("renotifyPending re-sends the request only once its backoff interval has el
   network.advanceClock(10 * 60_000 + 1_000);
   await alice.renotifyPending();
   const conversations = await alice.listConversations();
-  assert.equal(conversations.find((c) => c.convKey === request!.convKey)?.pending, false, "bob now has a half; nothing left to re-notify");
+  assert.ok(conversations.some((c) => c.convKey === request!.convKey), "alice's own half is listed");
+});
+
+test("listConversations lists only the caller's own halves, so a pending request never enters it", async () => {
+  const { network, client } = harness();
+  network.createAccount("did:plc:alice", "pds1");
+  network.createAccount("did:plc:bob", "pds1");
+  const alice = client("did:plc:alice");
+  const bob = client("did:plc:bob");
+  await bob.enableDms("everyone");
+  await alice.startConversation(["did:plc:bob"]);
+
+  assert.equal((await bob.listRequests()).length, 1);
+  assert.deepEqual(await bob.listConversations(), []);
+});
+
+test("a sender with too many requests is skipped and reported instead of failing the whole scan", async () => {
+  const { network, client } = harness();
+  for (const did of ["did:plc:bob", "did:plc:carol", "did:plc:dave", "did:plc:x1", "did:plc:x2", "did:plc:x3"]) network.createAccount(did, "pds1");
+  const bob = client("did:plc:bob", "pds1", { limits: { maxRequestsPerWriter: 2 } });
+  await bob.enableDms("everyone");
+  const carol = client("did:plc:carol");
+  for (const extra of ["did:plc:x1", "did:plc:x2", "did:plc:x3"]) await carol.startConversation(["did:plc:bob", extra]);
+  await client("did:plc:dave").startConversation(["did:plc:bob"]);
+
+  const scan = await bob.scanRequests();
+  assert.deepEqual(scan.requests.map((request) => request.sender), ["did:plc:dave"]);
+  assert.deepEqual(scan.skipped, { oversizedWriters: ["did:plc:carol"], failedWriters: [], writerSetTruncated: false });
+  assert.deepEqual((await bob.listRequests()).map((request) => request.sender), ["did:plc:dave"]);
+});
+
+test("a sender whose host cannot be reached is skipped and reported, and other senders still load", async () => {
+  const { network, client } = harness();
+  for (const did of ["did:plc:bob", "did:plc:carol", "did:plc:dave"]) network.createAccount(did, "pds1");
+  const bob = client("did:plc:bob", "pds1", {
+    resolvePds: async (did) => {
+      if (did === "did:plc:carol") throw new TypeError("fetch failed");
+      return network.resolvePds(did);
+    },
+  });
+  await bob.enableDms("everyone");
+  await client("did:plc:carol").startConversation(["did:plc:bob"]);
+  await client("did:plc:dave").startConversation(["did:plc:bob"]);
+
+  const scan = await bob.scanRequests();
+  assert.deepEqual(scan.requests.map((request) => request.sender), ["did:plc:dave"]);
+  assert.deepEqual(scan.skipped.failedWriters, [{ did: "did:plc:carol", reason: "fetch failed" }]);
+  assert.equal(scan.skipped.writerSetTruncated, false);
+});
+
+test("a tracked writer set beyond the scan limit is truncated and flagged, not fatal", async () => {
+  const { network, client } = harness();
+  for (const did of ["did:plc:bob", "did:plc:carol", "did:plc:dave"]) network.createAccount(did, "pds1");
+  const bob = client("did:plc:bob", "pds1", { limits: { maxInboxScan: 1 } });
+  await bob.enableDms("everyone");
+  await client("did:plc:carol").startConversation(["did:plc:bob"]);
+  await client("did:plc:dave").startConversation(["did:plc:bob"]);
+
+  const scan = await bob.scanRequests();
+  assert.equal(scan.skipped.writerSetTruncated, true);
+  assert.equal(scan.requests.length, 1);
+});
+
+test("a local store failure while scanning requests propagates instead of masquerading as an unreachable sender", async () => {
+  const { network, client } = harness();
+  for (const did of ["did:plc:bob", "did:plc:carol"]) network.createAccount(did, "pds1");
+  const bob = client("did:plc:bob", "pds1", {
+    store: { async get() { throw new Error("store down"); }, async set() {}, async delete() {} },
+  });
+  await bob.enableDms("everyone");
+  await client("did:plc:carol").startConversation(["did:plc:bob"]);
+
+  await assert.rejects(bob.scanRequests(), /store down/);
 });

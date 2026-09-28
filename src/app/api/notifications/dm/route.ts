@@ -1,20 +1,22 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { parseDmSpaceUri } from "@/protocol/keys";
 import { requireSession } from "@/auth/session";
+import { authorizeDmSubscription } from "@/lib/dm-subscription";
 import { getRawDb } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const maxDuration = 35;
 
-// Content-free DM change stream. The space URI is unguessable (a random
-// `convKey` for conversation halves), and the events carry only a monotonic
+// Content-free DM change stream. Inbox streams are owner-only; a conversation
+// half is guarded by its random `convKey`. Events carry only a monotonic
 // cursor, so this endpoint reveals change timing and nothing else: it never
 // reads records, never mints credentials, and never touches DM content.
 export async function GET(request: NextRequest) {
   try {
-    await requireSession();
-    const space = request.nextUrl.searchParams.get("space") ?? "";
-    if (!parseDmSpaceUri(space)) return NextResponse.json({ error: "The space must be a DM inbox or DM conversation URI." }, { status: 400 });
+    const session = await requireSession();
+    const requested = request.nextUrl.searchParams.get("space") ?? "";
+    const decision = authorizeDmSubscription(requested, session.did);
+    if (!decision.allowed) return NextResponse.json({ error: decision.reason }, { status: decision.status });
+    const space = decision.space;
     const headerCursor = request.headers.get("last-event-id");
     const queryCursor = request.nextUrl.searchParams.get("after") ?? "0";
     const cursorText = headerCursor || queryCursor;
