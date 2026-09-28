@@ -77,6 +77,21 @@ export function parseDmConversationUri(uri: string): { ownerDid: string; convKey
   return dmConversationUri(ownerDid, convKey) === uri ? { ownerDid, convKey } : null;
 }
 
+export function parseDmMessageUri(value: unknown): { ownerDid: string; convKey: string; repo: string; rkey: string } | null {
+  if (typeof value !== "string") return null;
+  const match = /^at:\/\/(did:[^/\s]+)\/space\/org\.slack\.dm\.conversation\/([A-Za-z0-9._~:-]{1,128})\/(did:[^/\s]+)\/org\.slack\.dm\.message\/([A-Za-z0-9._~:-]{1,128})$/.exec(value);
+  if (!match) return null;
+  const [, ownerDid, convKey, repo, rkey] = match;
+  if (repo !== ownerDid || !isTid(convKey) || !isTid(rkey)) return null;
+  try {
+    return spaceRecordUri(dmConversationUri(ownerDid, convKey), repo, "org.slack.dm.message", rkey) === value
+      ? { ownerDid, convKey, repo, rkey }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function canonicalParticipants(dids: readonly string[]): string[] {
   const unique = [...new Set(dids)].sort();
   if (unique.length < 2 || unique.length > 100) {

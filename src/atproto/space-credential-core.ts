@@ -15,7 +15,7 @@ export type SpaceCredentialDeps = {
 };
 
 export class SpaceCredentialError extends Error {
-  constructor(message: string, readonly status: 401 | 403) {
+  constructor(message: string, readonly status: 401 | 403 | 404 | 410, readonly code?: string) {
     super(message);
     this.name = "SpaceCredentialError";
   }
@@ -100,11 +100,15 @@ export async function exchangeSpaceCredential(input: {
   const body = await readUpstreamJson<{ credential?: unknown; message?: unknown; error?: unknown }>(response, 64 * 1024);
   if (!response.ok || typeof body?.credential !== "string" || body.credential.length === 0) {
     const message = typeof body?.message === "string" ? body.message : `Space credential exchange failed (${response.status}).`;
-    // The pinned PDS reports a validly authenticated non-member as HTTP 400
-    // with the protocol-specific UserNotAuthorized error code. Normalize that
-    // authorization denial so routes clear access-bound caches consistently.
-    if (response.status === 401 || response.status === 403 || (response.status === 400 && body?.error === "UserNotAuthorized")) {
-      throw new SpaceCredentialError(message, response.status === 401 ? 401 : 403);
+    const code = typeof body?.error === "string" ? body.error : undefined;
+    // The pinned PDS reports every credential-exchange denial as HTTP 400 with a
+    // protocol-specific error code (UserNotAuthorized, SpaceNotFound,
+    // SpaceDeleted). Normalize each to its own status so callers can tell "denied"
+    // apart from "the half doesn't exist yet" and "the half was deleted" (M4
+    // per-participant read status), while a bare 401/403 still maps to denial.
+    if (response.status === 401 || response.status === 403 || (response.status === 400 && (code === "UserNotAuthorized" || code === "SpaceNotFound" || code === "SpaceDeleted"))) {
+      const status = code === "SpaceNotFound" ? 404 : code === "SpaceDeleted" ? 410 : response.status === 401 ? 401 : 403;
+      throw new SpaceCredentialError(message, status, code);
     }
     throw new Error(message);
   }

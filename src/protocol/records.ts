@@ -8,6 +8,7 @@ import {
   isSkey,
   isTid,
   parseDmConversationUri,
+  parseDmMessageUri,
   parseSpaceRecordUri,
   reactionRecordKey,
   requestRecordKey,
@@ -228,6 +229,7 @@ function validateDmReaction(record: Record<string, unknown>, context: RecordCont
   if (typeof record.subject !== "string") return invalid("reaction target is not a DM message in this conversation");
   const subject = parseDmMessageUri(record.subject);
   if (!subject || subject.convKey !== half.convKey) return invalid("reaction target is not a DM message in this conversation");
+  if (context.participants && !context.participants.includes(subject.ownerDid)) return invalid("reaction target must be a message from a conversation participant");
   if (!boundedString(record.emoji, 1, 32) || !isDatetime(record.createdAt)) return invalid("invalid reaction fields");
   if (context.rkey !== reactionRecordKey(record.subject, record.emoji, context.repoDid)) return invalid("reaction key is not canonical");
   return { valid: true };
@@ -269,21 +271,6 @@ function parseDmInboxUri(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const match = /^at:\/\/(did:[^/\s]+)\/space\/org\.slack\.dm\.inbox\/self$/.exec(value);
   return match && isDid(match[1]) ? match[1] : null;
-}
-
-function parseDmMessageUri(value: unknown): { ownerDid: string; convKey: string; repo: string; rkey: string } | null {
-  if (typeof value !== "string") return null;
-  const match = /^at:\/\/(did:[^/\s]+)\/space\/org\.slack\.dm\.conversation\/([A-Za-z0-9._~:-]{1,128})\/(did:[^/\s]+)\/org\.slack\.dm\.message\/([A-Za-z0-9._~:-]{1,128})$/.exec(value);
-  if (!match) return null;
-  const [, ownerDid, convKey, repo, rkey] = match;
-  if (repo !== ownerDid || !isTid(convKey) || !isTid(rkey)) return null;
-  try {
-    return spaceRecordUri(dmConversationUri(ownerDid, convKey), repo, "org.slack.dm.message", rkey) === value
-      ? { ownerDid, convKey, repo, rkey }
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 function isSpaceUri(value: unknown, spaceType: string): value is string {

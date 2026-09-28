@@ -9,6 +9,7 @@ import {
   dmConversationUri,
   dmInboxUri,
   parseDmConversationUri,
+  parseDmMessageUri,
   parseSpaceRecordUri,
   parseSpaceUri,
   reactionRecordKey,
@@ -100,6 +101,18 @@ test("DM conversation URIs parse strictly and reject other space shapes", () => 
   assert.equal(parseDmConversationUri(`at://did:plc:alice/space/org.slack.dm.conversation/notatid`), null);
   assert.equal(parseDmConversationUri(`at://alice/space/org.slack.dm.conversation/${convKey}`), null);
   assert.equal(parseDmConversationUri(""), null);
+});
+
+test("DM message record URIs parse only the canonical owner-authored shape", () => {
+  const convKey = "234567abcdefg";
+  const rkey = "234567abcdefh";
+  const uri = spaceRecordUri(dmConversationUri("did:plc:alice", convKey), "did:plc:alice", "org.slack.dm.message", rkey);
+  assert.deepEqual(parseDmMessageUri(uri), { ownerDid: "did:plc:alice", convKey, repo: "did:plc:alice", rkey });
+  const forged = spaceRecordUri(dmConversationUri("did:plc:alice", convKey), "did:plc:bob", "org.slack.dm.message", rkey);
+  assert.equal(parseDmMessageUri(forged), null, "a record whose repo is not the half owner is not a canonical DM message URI");
+  assert.equal(parseDmMessageUri(`at://did:plc:alice/space/org.slack.dm.conversation/${convKey}/did:plc:alice/org.slack.dm.reaction/${rkey}`), null);
+  assert.equal(parseDmMessageUri(42), null);
+  assert.equal(parseDmMessageUri(null), null);
 });
 
 test("canonical participants are sorted, deduplicated, and bounded to 2 through 100 DIDs", () => {

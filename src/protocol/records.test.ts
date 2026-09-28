@@ -162,6 +162,8 @@ test("DM reactions key on a message in the same conversation", () => {
   assert.equal(validateSpaceRecord("org.slack.dm.reaction", { ...reaction, emoji: "x".repeat(33) }, context).valid, false);
   assert.equal(validateSpaceRecord("org.slack.dm.reaction", { ...reaction, createdAt: "yesterday" }, context).valid, false);
   assert.equal(validateSpaceRecord("org.slack.dm.reaction", { ...reaction, note: "extra" }, context).valid, false);
+  assert.equal(validateSpaceRecord("org.slack.dm.reaction", reaction, { ...context, participants: [authorityDid, memberDid] }).valid, true);
+  assert.equal(validateSpaceRecord("org.slack.dm.reaction", reaction, { ...context, participants: [authorityDid, "did:plc:third"] }).valid, false);
 });
 
 test("DM headers match requests only with identical keys and participants", () => {
