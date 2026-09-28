@@ -17,6 +17,9 @@ importers:
       '@atproto/jwk-jose':
         specifier: 0.2.4
         version: 0.2.4
+      '@atproto/jwk-webcrypto':
+        specifier: 0.3.4
+        version: 0.3.4
       '@atproto/lex-client':
         specifier: 0.3.6
         version: 0.3.6

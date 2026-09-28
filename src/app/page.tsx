@@ -10,8 +10,14 @@ import { redirect } from "next/navigation";
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const { appUrl, plcDirectoryUrl } = getConfig();
-  const dmConfig = { appUrl: appUrl.origin, plcUrl: plcDirectoryUrl.toString(), scope: DM_BROWSER_SCOPES.join(" ") };
+  const { appUrl, plcDirectoryUrl, operatorServiceRef } = getConfig();
+  const dmConfig = {
+    appUrl: appUrl.origin,
+    plcUrl: plcDirectoryUrl.toString(),
+    scope: DM_BROWSER_SCOPES.join(" "),
+    serviceRef: operatorServiceRef,
+    loopback: appUrl.protocol === "http:",
+  };
   const requestHost = (await headers()).get("host");
   if (appUrl.protocol === "http:" && requestHost && requestHost.toLowerCase() !== appUrl.host.toLowerCase()) {
     redirect(appUrl.origin);

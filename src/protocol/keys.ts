@@ -69,6 +69,23 @@ export function dmConversationUri(ownerDid: string, convKey: string): string {
   return `at://${ownerDid}/space/org.slack.dm.conversation/${convKey}`;
 }
 
+export function parseDmInboxUri(uri: string): { ownerDid: string } | null {
+  const match = /^at:\/\/(did:[^/\s]+)\/space\/org\.slack\.dm\.inbox\/([A-Za-z0-9._~:-]{1,128})$/.exec(uri);
+  if (!match) return null;
+  const [, ownerDid, skey] = match;
+  if (!isDid(ownerDid) || skey !== DM_INBOX_SKEY) return null;
+  return dmInboxUri(ownerDid) === uri ? { ownerDid } : null;
+}
+
+/** Accepts exactly the two DM space kinds (inbox or conversation half); everything else is rejected. */
+export function parseDmSpaceUri(uri: string): { kind: "inbox"; ownerDid: string } | { kind: "conversation"; ownerDid: string; convKey: string } | null {
+  const inbox = parseDmInboxUri(uri);
+  if (inbox) return { kind: "inbox", ownerDid: inbox.ownerDid };
+  const conversation = parseDmConversationUri(uri);
+  if (conversation) return { kind: "conversation", ...conversation };
+  return null;
+}
+
 export function parseDmConversationUri(uri: string): { ownerDid: string; convKey: string } | null {
   const match = /^at:\/\/(did:[^/\s]+)\/space\/org\.slack\.dm\.conversation\/([A-Za-z0-9._~:-]{1,128})$/.exec(uri);
   if (!match) return null;

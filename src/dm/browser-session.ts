@@ -1,8 +1,11 @@
-import type { OAuthSession } from "@atproto/oauth-client-browser";
+import type { AtprotoDid, HandleResolver, OAuthSession } from "@atproto/oauth-client-browser";
 import { buildDmClientMetadata } from "./client-metadata";
 import { AtprotoClient } from "@/atproto/xrpc";
+import { readUpstreamText } from "@/lib/bounded-json";
 
-export type DmConfig = { appUrl: string; plcUrl: string; scope: string };
+export type DmConfig = { appUrl: string; plcUrl: string; scope: string; serviceRef: string; loopback: boolean };
+
+const MAX_WELL_KNOWN_DID_BYTES = 512;
 
 export class DmAccountMismatchError extends Error {
   constructor() {
@@ -12,13 +15,45 @@ export class DmAccountMismatchError extends Error {
 }
 
 async function loadDmClient(config: DmConfig) {
-  const { BrowserOAuthClient } = await import("@atproto/oauth-client-browser");
+  const { BrowserOAuthClient, asResolvedHandle } = await import("@atproto/oauth-client-browser");
   const metadata = buildDmClientMetadata({ appUrl: config.appUrl, scope: config.scope });
   return BrowserOAuthClient.load({
     clientId: metadata.client_id,
     plcDirectoryUrl: config.plcUrl,
     allowHttp: new URL(config.appUrl).protocol === "http:",
+    handleResolver: wellKnownHandleResolver(asResolvedHandle),
   });
+}
+
+/**
+ * `BrowserOAuthClientOptions` requires a `handleResolver` (the browser cannot
+ * do DNS lookups itself), but `connectDms`/`restoreDmSession` always sign in
+ * with a DID from the already-established server session, never a raw
+ * handle, so this path only exists to satisfy that requirement. It implements
+ * just the official HTTP "well-known" strategy
+ * (`https://<handle>/.well-known/atproto-did`) directly against the handle's
+ * own domain: no DNS-over-HTTPS relay and no hosted third-party AppView (the
+ * library's own README warns that a service such as bsky.social leaks the
+ * handle and the caller's IP to that company), matching this feature's rule
+ * that no company- or operator-run service may sit in the discovery path.
+ */
+export function wellKnownHandleResolver(asResolvedHandle: (value: string) => null | (string & AtprotoDid)): HandleResolver {
+  return {
+    async resolve(handle, options) {
+      let response: Response;
+      try {
+        response = await fetch(`https://${handle}/.well-known/atproto-did`, { redirect: "error", signal: options?.signal });
+      } catch {
+        return null;
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        return null;
+      }
+      const text = await readUpstreamText(response, MAX_WELL_KNOWN_DID_BYTES);
+      return text ? asResolvedHandle(text.trim()) : null;
+    },
+  };
 }
 
 /** Redirects the browser to the user's PDS to authorize the DM scope set. Never returns normally. */

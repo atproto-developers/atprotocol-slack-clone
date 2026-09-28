@@ -1,13 +1,18 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChannelView } from "./channel-view";
 import { api, httpStatus, isAccessFailure, makeTid, mergeMessages, messageOf, parseWorkspaceUri, TRANSITIONING_STATUS, withReactions, type ChannelSelection, type InboxRequest, type Message, type PendingOperation, type Reaction, type StalledOperation } from "./client-api";
+import { DmProvider, type DmView } from "./dm-context";
 import { Sidebar } from "./sidebar";
 import { WorkspaceHome } from "./workspace-home";
 import { WorkspaceOnboarding } from "./workspace-onboarding";
 import type { DmConfig } from "@/dm/browser-session";
 import type { WorkspaceCandidate, WorkspaceSummary } from "@/workspaces/read-model";
+
+// The DM stage renders only client-side; see the note in sidebar.tsx.
+const DmStage = dynamic(() => import("./dm-stage").then((mod) => mod.DmStage), { ssr: false });
 
 type RefreshSelectedChannel = (selected: ChannelSelection, reloadContent?: boolean) => Promise<void>;
 
@@ -18,6 +23,7 @@ export function WorkspaceManager({ did, dmConfig }: { did: string; dmConfig: DmC
   const [inboxPermissionMissing, setInboxPermissionMissing] = useState(false);
   const [activeUri, setActiveUri] = useState("");
   const [activeChannel, setActiveChannel] = useState<ChannelSelection | null>(null);
+  const [dmView, setDmView] = useState<DmView | null>(null);
   const [workspaceName, setWorkspaceName] = useState("");
   const [workspaceOperationId, setWorkspaceOperationId] = useState("");
   const [inviteUri, setInviteUri] = useState("");
@@ -79,6 +85,11 @@ export function WorkspaceManager({ did, dmConfig }: { did: string; dmConfig: DmC
     setActiveChannel(null);
     resetChannelContent();
   }, [resetChannelContent]);
+
+  const openDmView = useCallback((view: DmView | null) => {
+    setDmView(view);
+    if (view) clearChannelView();
+  }, [clearChannelView]);
 
   const handleChannelReadFailure = useCallback((caught: unknown) => {
     const statusCode = httpStatus(caught);
@@ -468,6 +479,7 @@ export function WorkspaceManager({ did, dmConfig }: { did: string; dmConfig: DmC
     if (!activeWorkspace) return;
     const selected = { workspace: activeWorkspace.uri, skey: channel.skey, name: channel.name, visibility: channel.visibility };
     channelDataEpoch.current += 1;
+    setDmView(null);
     selectChannel(selected); resetChannelContent(); setError("");
     try {
       if (selected.visibility === "transitioning") {
@@ -532,6 +544,7 @@ export function WorkspaceManager({ did, dmConfig }: { did: string; dmConfig: DmC
   }
 
   function switchWorkspace(uri: string) {
+    setDmView(null);
     selectWorkspace(uri); clearChannelView(); setInbox([]); setStalledOperations([]);
   }
 
@@ -540,23 +553,26 @@ export function WorkspaceManager({ did, dmConfig }: { did: string; dmConfig: DmC
   }
 
   return (
+    <DmProvider did={did} dmConfig={dmConfig} workspaces={workspaces} activeWorkspace={activeWorkspace} view={dmView} openView={openDmView}>
     <main className="app-frame">
-      <Sidebar did={did} dmConfig={dmConfig} workspaces={workspaces} workspaceCandidates={workspaceCandidates} activeUri={activeUri} activeWorkspace={activeWorkspace} activeChannel={activeChannel} switchWorkspace={switchWorkspace} openChannel={openChannel} grant={grant} setError={setError} />
+      <Sidebar did={did} workspaces={workspaces} workspaceCandidates={workspaceCandidates} activeUri={activeUri} activeWorkspace={activeWorkspace} activeChannel={activeChannel} switchWorkspace={switchWorkspace} openChannel={openChannel} grant={grant} setError={setError} />
       <section className="main-stage">
-        <header className="topbar"><div className="breadcrumb">Your spaces <span>/</span> <strong>{activeChannel?.name ?? activeWorkspace?.name ?? "Overview"}</strong></div><div className="topbar-tools"><button className="help-button" onClick={() => void refreshWorkspaces().catch((caught) => setError(messageOf(caught)))}>↻ <span>Refresh</span></button><button className="top-avatar">{did.slice(-1).toUpperCase()}</button></div></header>
+        <header className="topbar"><div className="breadcrumb">Your spaces <span>/</span> <strong>{activeChannel?.name ?? (dmView ? "Direct messages" : activeWorkspace?.name ?? "Overview")}</strong></div><div className="topbar-tools"><button className="help-button" onClick={() => void refreshWorkspaces().catch((caught) => setError(messageOf(caught)))}>↻ <span>Refresh</span></button><button className="top-avatar">{did.slice(-1).toUpperCase()}</button></div></header>
         <div className="overview-content">
           {error && <p className="form-error" role="alert">{error}</p>}
           {status && !(activeChannel?.visibility === "transitioning" && status === TRANSITIONING_STATUS) && <p className="status-note" role="status">{status}</p>}
           {activeWorkspace && activeWorkspace.degradedReasons.length > 0 && <div className="envelope-alert" role="alert"><strong>Workspace is in degraded mode.</strong><ul>{activeWorkspace.degradedReasons.map((reason) => <li key={reason}>{reason}</li>)}</ul><p>Admin changes and inbox reconciliation are paused until the workspace is within the supported v1 limits.</p></div>}
           {pendingOperation && <p className="status-note">Operation {pendingOperation.operationId} is still pending. <button className="text-button" disabled={busy || workspaceDegraded} onClick={() => void runOperation(pendingOperation.request, pendingOperation.workspace, pendingOperation.operationId)}>Retry same operation ↻</button></p>}
           {stalledOperations.length > 0 && <div className="operation-alert" role="alert"><strong>{stalledOperations.length} operation(s) have had no progress for at least five minutes.{stalledOperationsTruncated ? " Showing the oldest 100; more stalled operations exist." : ""}</strong>{stalledOperations.map((operation) => <p key={`${operation.actor}:${operation.operationId}`}>{operation.operationId} · {operation.actor} · {operation.error ?? operation.state}</p>)}</div>}
-          {!activeWorkspace && <WorkspaceOnboarding busy={busy} workspaceName={workspaceName} setWorkspaceName={setWorkspaceName} inviteUri={inviteUri} setInviteUri={setInviteUri} createWorkspace={createWorkspace} beginAccept={beginAccept} grant={grant} />}
-          {activeWorkspace && (!activeChannel || activeChannel.workspace !== activeUri) && <WorkspaceHome did={did} activeWorkspace={activeWorkspace} busy={busy} workspaceDegraded={workspaceDegraded} needOperatorLeave={needOperatorLeave} inbox={inbox} inboxLoaded={inboxLoaded} inboxPermissionMissing={inboxPermissionMissing} runOperation={runOperation} grant={grant} leaveWorkspace={leaveWorkspace} syncInbox={syncInbox} setStatus={setStatus} setError={setError} />}
-          {activeChannel?.workspace === activeUri && <ChannelView did={did} activeChannel={activeChannel} activeWorkspace={activeWorkspace} busy={busy} workspaceDegraded={workspaceDegraded} needOperatorLeave={needOperatorLeave} needChannelRead={needChannelRead} needChannelWrite={needChannelWrite} needJoinWrite={needJoinWrite} requestSubmitted={requestSubmitted} privateRoster={privateRoster} messages={messages} hasMore={hasMore} nextOffset={nextOffset} messageText={messageText} setMessageText={setMessageText} replyTo={replyTo} setReplyTo={setReplyTo} loadMessages={loadMessages} runOperation={runOperation} grant={grant} leaveChannel={leaveChannel} requestPrivateAccess={requestPrivateAccess} authorizeCurrentChannel={authorizeCurrentChannel} sendMessage={sendMessage} toggleReaction={toggleReaction} editMessage={editMessage} deleteMessage={deleteMessage} setError={setError} />}
+          {!dmView && !activeWorkspace && <WorkspaceOnboarding busy={busy} workspaceName={workspaceName} setWorkspaceName={setWorkspaceName} inviteUri={inviteUri} setInviteUri={setInviteUri} createWorkspace={createWorkspace} beginAccept={beginAccept} grant={grant} />}
+          {!dmView && activeWorkspace && (!activeChannel || activeChannel.workspace !== activeUri) && <WorkspaceHome did={did} activeWorkspace={activeWorkspace} busy={busy} workspaceDegraded={workspaceDegraded} needOperatorLeave={needOperatorLeave} inbox={inbox} inboxLoaded={inboxLoaded} inboxPermissionMissing={inboxPermissionMissing} runOperation={runOperation} grant={grant} leaveWorkspace={leaveWorkspace} syncInbox={syncInbox} setStatus={setStatus} setError={setError} />}
+          {!dmView && activeChannel?.workspace === activeUri && <ChannelView did={did} activeChannel={activeChannel} activeWorkspace={activeWorkspace} busy={busy} workspaceDegraded={workspaceDegraded} needOperatorLeave={needOperatorLeave} needChannelRead={needChannelRead} needChannelWrite={needChannelWrite} needJoinWrite={needJoinWrite} requestSubmitted={requestSubmitted} privateRoster={privateRoster} messages={messages} hasMore={hasMore} nextOffset={nextOffset} messageText={messageText} setMessageText={setMessageText} replyTo={replyTo} setReplyTo={setReplyTo} loadMessages={loadMessages} runOperation={runOperation} grant={grant} leaveChannel={leaveChannel} requestPrivateAccess={requestPrivateAccess} authorizeCurrentChannel={authorizeCurrentChannel} sendMessage={sendMessage} toggleReaction={toggleReaction} editMessage={editMessage} deleteMessage={deleteMessage} setError={setError} />}
+          {dmView && <DmStage />}
           <div className="data-note"><span className="note-icon">◈</span><span><strong>Your conversations belong to you.</strong><small>Records remain in their authors’ AT Protocol accounts. Workspace access is enforced by PDS member lists.</small></span><a href="https://atproto.com" target="_blank" rel="noreferrer">How it works ↗</a></div>
         </div>
       </section>
     </main>
+    </DmProvider>
   );
 
   async function toggleReaction(subject: string, emoji: string, active: boolean) {

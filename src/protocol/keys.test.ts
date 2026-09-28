@@ -9,7 +9,9 @@ import {
   dmConversationUri,
   dmInboxUri,
   parseDmConversationUri,
+  parseDmInboxUri,
   parseDmMessageUri,
+  parseDmSpaceUri,
   parseSpaceRecordUri,
   parseSpaceUri,
   reactionRecordKey,
@@ -101,6 +103,34 @@ test("DM conversation URIs parse strictly and reject other space shapes", () => 
   assert.equal(parseDmConversationUri(`at://did:plc:alice/space/org.slack.dm.conversation/notatid`), null);
   assert.equal(parseDmConversationUri(`at://alice/space/org.slack.dm.conversation/${convKey}`), null);
   assert.equal(parseDmConversationUri(""), null);
+});
+
+test("DM inbox URIs parse strictly and reject other skeys or shapes", () => {
+  assert.deepEqual(parseDmInboxUri("at://did:plc:alice/space/org.slack.dm.inbox/self"), { ownerDid: "did:plc:alice" });
+  assert.equal(parseDmInboxUri("at://did:plc:alice/space/org.slack.dm.inbox/other"), null);
+  assert.equal(parseDmInboxUri("at://did:plc:alice/space/org.slack.dm.inbox"), null);
+  assert.equal(parseDmInboxUri("at://alice/space/org.slack.dm.inbox/self"), null);
+  assert.equal(parseDmInboxUri("at://did:plc:alice/space/org.slack.dm.conversation/self"), null);
+  assert.equal(parseDmInboxUri(""), null);
+});
+
+test("the DM SSE route parameter accepts only DM inbox or conversation space URIs", () => {
+  const convKey = "234567abcdefg";
+  assert.deepEqual(parseDmSpaceUri("at://did:plc:alice/space/org.slack.dm.inbox/self"), { kind: "inbox", ownerDid: "did:plc:alice" });
+  assert.deepEqual(parseDmSpaceUri(dmConversationUri("did:plc:alice", convKey)), { kind: "conversation", ownerDid: "did:plc:alice", convKey });
+  for (const rejected of [
+    "",
+    "at://did:plc:alice/space/org.slack.workspace/workspace",
+    "at://did:plc:alice/space/org.slack.inbox/inbox",
+    "at://did:plc:alice/space/org.slack.channel/general",
+    "at://did:plc:alice/space/org.slack.dm.inbox/other",
+    `at://did:plc:alice/space/org.slack.dm.conversation/${convKey}/did:plc:alice/org.slack.dm.message/${convKey}`,
+    "at://did:plc:alice/space/org.slack.dm.conversation/notatid",
+    "https://example.com/space/org.slack.dm.inbox/self",
+    "at://did:plc:alice/org.slack.dm.inbox/self",
+  ]) {
+    assert.equal(parseDmSpaceUri(rejected), null, `rejected ${rejected}`);
+  }
 });
 
 test("DM message record URIs parse only the canonical owner-authored shape", () => {
