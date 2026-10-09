@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { dmConversationUri, dmInboxUri } from "@/protocol/keys";
 import type { DmHalfStatus, DmMessage, DmReaction } from "@/dm/dm-client";
-import { conversationLabel, participantLabel } from "@/dm/ui-logic";
+import { conversationLabel, participantLabel, retainAfterRefresh } from "@/dm/ui-logic";
 import { messageOf } from "./client-api";
 import { useDmContext } from "./dm-context";
 
@@ -29,11 +29,21 @@ export function DmConversation({ convKey, participants }: { convKey: string; par
   const [editingUri, setEditingUri] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
 
+  const refreshes = useRef({ started: 0, applied: 0 });
+
   const loadPage = useCallback(async (before?: string) => {
     if (!client) return null;
+    const refreshing = before === undefined;
+    const ticket = refreshing ? (refreshes.current.started += 1) : 0;
     const page = await client.readConversation(convKey, participants, before ? { before } : {});
-    setMessages((current) => mergeByUri(current, page.messages));
-    setReactions((current) => mergeByUri(current, page.reactions));
+    if (refreshing) {
+      if (ticket < refreshes.current.applied) return page;
+      refreshes.current.applied = ticket;
+    }
+    const windowStart = page.nextBefore ?? "";
+    const freshMessageUris = new Set(page.messages.map((message) => message.uri));
+    setMessages((current) => mergeByUri(refreshing ? retainAfterRefresh(current, page.halves, (message) => message.rkey >= windowStart) : current, page.messages));
+    setReactions((current) => mergeByUri(refreshing ? retainAfterRefresh(current, page.halves, (reaction) => freshMessageUris.has(reaction.subject)) : current, page.reactions));
     setHalves(page.halves);
     if (before !== undefined) setNextBefore(page.nextBefore);
     else setNextBefore((current) => current ?? page.nextBefore);
@@ -44,6 +54,7 @@ export function DmConversation({ convKey, participants }: { convKey: string; par
     if (!client) return;
     let cancelled = false;
     let sources: EventSource[] = [];
+    let subscribed = "";
     const watchAndSubscribe = async (knownHalves: Record<string, DmHalfStatus>) => {
       const spaces = [
         ...Object.entries(knownHalves).filter(([, status]) => status === "ok").map(([ownerDid]) => dmConversationUri(ownerDid, convKey)),
@@ -55,6 +66,9 @@ export function DmConversation({ convKey, participants }: { convKey: string; par
         // Registration is best-effort: the 60-second poll keeps the view correct.
       }
       if (cancelled) return;
+      const subscription = spaces.join("|");
+      if (subscription === subscribed && sources.every((source) => source.readyState !== EventSource.CLOSED)) return;
+      subscribed = subscription;
       for (const source of sources) source.close();
       sources = spaces.map((space) => {
         const query = new URLSearchParams({ space, after: "0" });
@@ -281,6 +295,6 @@ function groupReactions(reactions: readonly DmReaction[], viewerDid: string): Ma
 }
 
 function mergeByUri<T extends { uri: string; rkey?: string }>(current: readonly T[], incoming: readonly T[]): T[] {
-  const unique = new Map([...incoming, ...current].map((entry) => [entry.uri, entry]));
+  const unique = new Map([...current, ...incoming].map((entry) => [entry.uri, entry]));
   return [...unique.values()].sort((left, right) => (right.rkey ?? "").localeCompare(left.rkey ?? ""));
 }

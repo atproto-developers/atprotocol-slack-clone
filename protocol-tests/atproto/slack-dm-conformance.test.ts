@@ -589,6 +589,7 @@ describe('atproto Slack direct-message protocol conformance', () => {
         'atproto',
         `space:${INBOX_TYPE}?authority=*&collection=${REQUEST}&action=create&action=update&action=delete`,
         `space:${INBOX_TYPE}?authority=self&action=read&manage=create&manage=update`,
+        `space:${INBOX_TYPE}?authority=*&action=read`,
         `space:${CONVERSATION_TYPE}?authority=self&collection=${HEADER}&collection=${MESSAGE}&collection=${REACTION}&action=create&action=update&action=delete&manage=create&manage=update&manage=delete`,
         `space:${CONVERSATION_TYPE}?authority=*&action=read`,
       ]

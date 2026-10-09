@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DmClient, type DmDeps, type DmStore } from "./dm-client";
 import { FakeDmNetwork } from "./testing/fake-pds";
-import { applyAllowlistEdit, coMemberDids, conversationVisible, describeSkippedSenders, parseParticipantInput, sharesAnyWorkspace } from "./ui-logic";
+import { applyAllowlistEdit, coMemberDids, conversationVisible, describeSkippedSenders, parseParticipantInput, retainAfterRefresh, sharesAnyWorkspace } from "./ui-logic";
 
 function createStore(): DmStore {
   const map = new Map<string, string>();
@@ -126,4 +126,20 @@ test("describeSkippedSenders is empty when nothing was skipped and names each ca
     describeSkippedSenders({ oversizedWriters: ["did:plc:a"], failedWriters: [{ did: "did:plc:b", reason: "x" }, { did: "did:plc:c", reason: "y" }], writerSetTruncated: true }),
     "Some senders were skipped: 1 sender sent too many requests; 2 senders could not be reached; more senders exist than could be scanned.",
   );
+});
+
+test("retainAfterRefresh drops window entries from readable halves but keeps copies from halves that can no longer be read", () => {
+  // #given
+  const current = [
+    { ownerDid: "did:plc:alice", rkey: "3", text: "deleted by its author" },
+    { ownerDid: "did:plc:alice", rkey: "1", text: "older than the window" },
+    { ownerDid: "did:plc:bob", rkey: "4", text: "bob left, but this copy was already fetched" },
+  ];
+  const halves = { "did:plc:alice": "ok", "did:plc:bob": "deleted" } as const;
+
+  // #when
+  const kept = retainAfterRefresh(current, halves, (entry) => entry.rkey >= "2");
+
+  // #then
+  assert.deepEqual(kept.map((entry) => entry.text), ["older than the window", "bob left, but this copy was already fetched"]);
 });

@@ -272,11 +272,14 @@ export class FakeDmNetwork {
     const did = this.requireSelf(auth);
     const repo = String(params.repo);
     if (repo !== did) throw new FakeXrpcError(400, "UserNotAuthorized", "Can only write to your own repo");
-    const space = this.requireSpace(params.space);
-    if (space.deleted) throw new FakeXrpcError(400, "SpaceDeleted", "Space has been deleted");
     const collection = String(params.collection);
     const rkey = String(params.rkey);
     const record = params.record as Record<string, unknown>;
+    if (typeof params.space !== "string" || !this.spaces.has(params.space) || this.spaces.get(params.space)!.deleted) {
+      // The pinned PDS stores the record in the writer's own repo and swallows the authority's SpaceNotFound.
+      return { uri: `${String(params.space)}/${repo}/${collection}/${rkey}`, cid: `cid-${this.cidCounter++}` };
+    }
+    const space = this.requireSpace(params.space);
     const repoCollections = this.repoCollections(space, repo);
     const records = repoCollections.get(collection) ?? new Map<string, { value: Record<string, unknown>; cid: string }>();
     repoCollections.set(collection, records);
@@ -309,7 +312,7 @@ export class FakeDmNetwork {
     const repo = String(params.repo);
     const collection = String(params.collection);
     const rkey = String(params.rkey);
-    const record = this.repoCollections(space, repo).get(collection)?.get(rkey);
+    const record = space.deleted ? undefined : this.repoCollections(space, repo).get(collection)?.get(rkey);
     if (!record) throw new FakeXrpcError(400, "RecordNotFound", "Record not found");
     return { uri: `${spaceUri(space)}/${repo}/${collection}/${rkey}`, cid: record.cid, value: record.value };
   }
@@ -319,7 +322,7 @@ export class FakeDmNetwork {
     const space = this.requireSpace(params.space);
     const repo = String(params.repo);
     const collection = String(params.collection);
-    const records = [...(this.repoCollections(space, repo).get(collection)?.entries() ?? [])]
+    const records = [...(space.deleted ? [] : this.repoCollections(space, repo).get(collection)?.entries() ?? [])]
       .sort(([left], [right]) => right.localeCompare(left))
       .map(([rkey, entry]) => ({ collection, rkey, cid: entry.cid, value: entry.value }));
     return paginate(records, params, (record) => record.rkey, "records");

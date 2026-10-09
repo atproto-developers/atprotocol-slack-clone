@@ -173,6 +173,44 @@ test("startConversation deduplicates identical participant sets and reports noIn
   assert.deepEqual(second.delivery, {}, "no new requests are sent on dedupe");
 });
 
+test("startConversation reports noInbox for a recipient who deleted their inbox", async () => {
+  // #given bob enabled DMs and then deleted his inbox space
+  const { network, client } = harness();
+  network.createAccount("did:plc:alice", "pds1");
+  network.createAccount("did:plc:bob", "pds2");
+  await client("did:plc:bob").enableDms("everyone");
+  await network.clientFor("did:plc:bob").procedure("com.atproto.simplespace.deleteSpace", { space: "at://did:plc:bob/space/org.slack.dm.inbox/self" });
+
+  // #when
+  const started = await client("did:plc:alice").startConversation(["did:plc:bob"]);
+
+  // #then
+  assert.equal(started.delivery["did:plc:bob"]?.status, "noInbox");
+});
+
+test("startConversation reports failed, not delivered, when the inbox probe itself is refused for a reason other than denial", async () => {
+  // #given the sender's session lacks the scope to ask for a delegation token (not a SpaceCredentialError)
+  const { network, client } = harness();
+  network.createAccount("did:plc:alice", "pds1");
+  network.createAccount("did:plc:bob", "pds2");
+  await client("did:plc:bob").enableDms("everyone");
+  const real = network.clientFor("did:plc:alice");
+  const refusing = Object.create(real, {
+    query: { value: async (method: string, ...rest: unknown[]) => {
+      if (method === "com.atproto.space.getDelegationToken") throw new Error("Missing required scope");
+      return (real.query as (method: string, ...rest: unknown[]) => Promise<unknown>)(method, ...rest);
+    } },
+  });
+  const alice = client("did:plc:alice", "pds1", { memberClient: refusing });
+
+  // #when
+  const started = await alice.startConversation(["did:plc:bob"]);
+
+  // #then
+  assert.equal(started.delivery["did:plc:bob"]?.status, "failed");
+  assert.match(started.delivery["did:plc:bob"]?.message ?? "", /Missing required scope/);
+});
+
 test("accept creates the reader's own half, matches the header, and always allows the sender (so a later mode switch does not lock them out)", async () => {
   const { network, client } = harness();
   network.createAccount("did:plc:alice", "pds1");
@@ -280,6 +318,26 @@ test("leave revokes the leaver's half for the other participant, and deleteEvery
 
   await alice.deleteEverything(started.convKey);
   const afterDelete = await bob.readConversation(started.convKey, started.participants);
+  assert.equal(afterDelete.halves["did:plc:alice"], "deleted");
+});
+
+test("a half deleted after its credential was cached is reported as deleted, not as a participant who has not replied", async () => {
+  // #given bob already holds a credential for alice's half
+  const { network, client } = harness();
+  network.createAccount("did:plc:alice", "pds1");
+  network.createAccount("did:plc:bob", "pds2");
+  const alice = client("did:plc:alice");
+  const bob = client("did:plc:bob");
+  await bob.enableDms("everyone");
+  const started = await alice.startConversation(["did:plc:bob"]);
+  await alice.send(started.convKey, "hi");
+  assert.equal((await bob.readConversation(started.convKey, started.participants)).halves["did:plc:alice"], "ok");
+
+  // #when alice deletes everything and bob reads again with the same engine
+  await alice.deleteEverything(started.convKey);
+  const afterDelete = await bob.readConversation(started.convKey, started.participants);
+
+  // #then
   assert.equal(afterDelete.halves["did:plc:alice"], "deleted");
 });
 

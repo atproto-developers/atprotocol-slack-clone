@@ -360,7 +360,11 @@ export class DmClient {
       const headerValidation = header && validateSpaceRecord("org.slack.dm.header", header, {
         authorityDid: ownerDid, spaceUri: half, repoDid: ownerDid, rkey: "self",
       });
-      if (!header || !headerValidation?.valid || !validateDmHeaderMatchesRequest(header, { convKey, participants: canonical })) {
+      if (!header) {
+        halves[ownerDid] = await this.classifyHeaderlessHalf(half);
+        return;
+      }
+      if (!headerValidation?.valid || !validateDmHeaderMatchesRequest(header, { convKey, participants: canonical })) {
         halves[ownerDid] = "missing";
         return;
       }
@@ -528,11 +532,10 @@ export class DmClient {
   }
 
   /**
-   * `startConversation`'s per-recipient status is derived from `putRecord`'s
-   * own outcome rather than a separate `getSpace`/credential probe: writing
-   * into a request collection targets a space that must already exist for the
-   * write to succeed, so a nonexistent inbox surfaces as `SpaceNotFound` on
-   * this same call, with one round trip instead of two.
+   * The pinned PDS accepts a `putRecord` into a space that does not exist (the record lands in the sender's own
+   * repo and the authority's `SpaceNotFound` is swallowed), so `putRecord`'s outcome cannot say whether the
+   * recipient enabled DMs. Minting a credential for the inbox can: `SpaceNotFound` means no inbox, while
+   * `UserNotAuthorized` means it exists and this sender simply is not a member.
    */
   private async sendRequest(recipientDid: string, convKey: string, participants: readonly string[], createdAt: string): Promise<DmDelivery> {
     const inbox = dmInboxUri(recipientDid);
@@ -542,13 +545,29 @@ export class DmClient {
     });
     if (!validation.valid) return { status: "failed", message: validation.reason };
     try {
+      await this.credentialFor(inbox);
+    } catch (error) {
+      if (isMissingSpace(error)) return { status: "noInbox" };
+      if (!(error instanceof SpaceCredentialError)) return { status: "failed", message: error instanceof Error ? error.message : String(error) };
+    }
+    try {
       await this.deps.memberClient.procedure("com.atproto.space.putRecord", {
         space: inbox, repo: this.deps.did, collection: "org.slack.dm.request", rkey: convKey, record,
       });
       return { status: "delivered" };
     } catch (error) {
-      if (isSpaceNotFound(error)) return { status: "noInbox" };
       return { status: "failed", message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /** A cached credential outlives a deleted half, so a missing header is re-checked with a fresh mint to tell "left" from "not replied". */
+  private async classifyHeaderlessHalf(half: string): Promise<DmHalfStatus> {
+    this.credentials.delete(half);
+    try {
+      await this.credentialFor(half);
+      return "missing";
+    } catch (error) {
+      return error instanceof SpaceCredentialError ? classifyHalfError(error) : "missing";
     }
   }
 
@@ -692,6 +711,10 @@ function hiddenRequestKey(uri: string): string {
 
 function hiddenConversationKey(convKey: string): string {
   return `hidden-conversation:${convKey}`;
+}
+
+function isMissingSpace(error: unknown): boolean {
+  return error instanceof SpaceCredentialError && (error.code === "SpaceNotFound" || error.code === "SpaceDeleted");
 }
 
 function isSpaceNotFound(error: unknown): boolean {

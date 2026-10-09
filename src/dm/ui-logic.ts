@@ -1,5 +1,5 @@
 import { isDid } from "@/protocol/keys";
-import type { DmClient, DmRequestMode, DmSkippedSenders } from "./dm-client";
+import type { DmClient, DmHalfStatus, DmRequestMode, DmSkippedSenders } from "./dm-client";
 
 /** The workspace surface DM UI needs; `@/workspaces/*` stays server-only for `src/dm/**`. */
 export type UiWorkspace = { uri: string; name: string; members: ReadonlyArray<{ did: string; active: boolean }> };
@@ -81,4 +81,17 @@ export function describeSkippedSenders(skipped: DmSkippedSenders): string {
   if (skipped.failedWriters.length > 0) reasons.push(`${senders(skipped.failedWriters.length)} could not be reached`);
   if (skipped.writerSetTruncated) reasons.push("more senders exist than could be scanned");
   return reasons.length > 0 ? `Some senders were skipped: ${reasons.join("; ")}.` : "";
+}
+
+/**
+ * What an open conversation keeps when its newest page is read again. The new read is the truth for its own
+ * window, so an edited, deleted or un-reacted entry drops out; copies from a half that can no longer be read
+ * (left, deleted, revoked) stay, because copies already fetched are not recalled.
+ */
+export function retainAfterRefresh<T extends { ownerDid: string }>(
+  current: readonly T[],
+  halves: Readonly<Record<string, DmHalfStatus>>,
+  inWindow: (entry: T) => boolean,
+): T[] {
+  return current.filter((entry) => !inWindow(entry) || halves[entry.ownerDid] !== "ok");
 }
