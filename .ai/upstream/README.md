@@ -15,10 +15,12 @@ Drafts for the atproto core team, written from what a Slack-style team app (chan
 | U7 | [Batch membership calls](U7-batch-membership.md) | Medium | Hundreds of sequential calls per invite or group |
 | U8 | [Third-party validation and key filter](U8-validation-and-key-filter.md) | Medium | Colon-delimited hash keys, local-only validation |
 | U9 | [Optional hidden spaces](U9-hidden-spaces.md) | Low | Random unguessable space keys as the only defense |
+| U10 | [Invitation discovery](U10-invitation-discovery.md) | High | Invite links as the only way a member learns they were added |
+| U11 | [Write-target existence](U11-write-target-existence.md) | Medium | A read-level grant and two extra calls per recipient just to learn whether a request can land |
 
-**U10, endorse only.** The proposal already lists an account and identity events endpoint for space-only syncers as future work and describes dynamic scope resolution like permission sets. Both would help us; a +1 is enough.
+**Endorse only.** The proposal already lists an account and identity events endpoint for space-only syncers as future work and describes dynamic scope resolution like permission sets. Both would help us; a +1 is enough.
 
-Suggested order: U1 to U4 first, since they remove the most application-side machinery.
+Suggested order: U1 to U4 and U10 first, since they remove the most application-side machinery.
 
 Before filing: strip the "Internal references" footer from each file, and re-run the pinned-PDS reproduction against the then-current revision, because the protocol is still a draft.
 

@@ -6,7 +6,7 @@ Build a Slack-style team workspace on atproto permissioned data. Accounts own th
 
 ## V1 scope
 
-- Multiple workspaces, workspace invitations and acceptance markers.
+- Multiple workspaces, workspace invitations and acceptance markers. Being added to a workspace is invisible to the member (the protocol has no "spaces I was added to" lookup), so an admin sends an invite link (`/?invite=<workspace URI>`); opening it shows the member an invitation with a Join button (sign-in and the PDS's permission screen still apply). Creating the first workspace asks for the one-time workspace-authority permission in the same step.
 - Public and private channels, text messages, one-level replies, reactions, and private-channel requests.
 - Admin promotion/demotion, workspace and channel leave/removal, privacy transitions, archive, retries and restart recovery.
 - Direct messages, 1:1 and group (2–100 participants), with no app-operated component able to read, gate, lose, or hold hostage a DM (see "Direct-message invariants" below).
@@ -19,7 +19,7 @@ Build a Slack-style team workspace on atproto permissioned data. Accounts own th
 - `listRepos` is a writer set, not membership. Inbox reconciliation unions it with the owner-authorized operator `listInboxWriters` candidate set; the admin client reads candidates itself using its inbox credential.
 - Workspace and private-channel roster/admin/decision records count only when authored by the workspace DID. Message and reaction edits/deletes are limited to the author.
 - Admin mutations go through an authenticated operator. Every call validates a PDS-issued service-auth JWT and derives the actor from its verified `iss`, then checks current workspace, inbox, and admin state.
-- Mutations are serialized, journaled, idempotent by `(workspace DID, actor DID, operationId, canonical request hash)`, and remain pending until PDS state matches the desired state.
+- Mutations are serialized, journaled, idempotent by `(workspace DID, actor DID, operationId, canonical request hash)`, and remain pending until PDS state matches the desired state. One exception: a workspace setup that completed no steps because the account has not yet approved the required OAuth permission is discarded instead of left pending, since there is nothing to recover, so its operation ID can be reused.
 - Removing membership blocks new credentials. Existing space credentials may work until their signed expiry, at most two hours by default.
 - Stable mutable records use canonical deterministic record keys as defined in the PRD. Message text is plain text, at most 10,000 Unicode code points.
 

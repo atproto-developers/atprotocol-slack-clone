@@ -33,6 +33,8 @@ The architecture holds. The DM invariants (no server DM scopes, no server DM con
 | F7 | Re-notify checks every minute, forever | App | Open |
 | F8 | Service-auth tokens have no replay cache | App | Open |
 | F9 | Leftovers (dialogs, stale docs, test flake) | App | Open |
+| F10 | An invited member cannot find the workspace; accept failures were silent | Split | App part **fixed** 2026-10-07; discovery is **U10** (see `2026-10-07-invite-discovery.md`) |
+| F11 | Gherkin features were never executed | App (process) | **Fixed** for `workspaces.feature`; 58 scenarios still `@unbound`, ratcheted by `bdd/gate.test.ts` |
 
 ---
 
@@ -106,11 +108,13 @@ Each item names the app finding it would resolve, the evidence, and the proposed
 
 **U9. Optional hidden spaces (low, trade-off).** Missing, deleted and unauthorized are distinguishable to a non-member (`SpaceNotFound`, `SpaceDeleted`, `UserNotAuthorized`), so existence can be probed. We use random keys as a workaround, and members benefit from the richer statuses. Ask for an opt-in setting that returns one uniform error to non-members.
 
-**U10. Endorse (already acknowledged upstream).** The proposal already lists an account and identity events endpoint for space-only syncers as future work, and describes permission-set-style dynamic scope resolution. Both would help this app; a +1 is enough.
+**Endorse only (already acknowledged upstream).** The proposal already lists an account and identity events endpoint for space-only syncers as future work, and describes permission-set-style dynamic scope resolution. Both would help this app; a +1 is enough.
+
+**U10. Invitation discovery (high).** A member's PDS lists only spaces the user has written to, so being added to a space is invisible to the member. Add a best-effort `notifyMembership` from the authority host to the member's PDS and a `listMemberships` query on the PDS. Draft: `.ai/upstream/U10-invitation-discovery.md`.
 
 ## Suggested order
 
-Send U1–U4 first, since they remove the most app-side machinery (writer bounds, the relay, shadow rosters, custody of the workspace session). Filing anything publicly needs an explicit go-ahead.
+Send U1–U4 and U10 first, since they remove the most app-side machinery (writer bounds, the relay, shadow rosters, custody of the workspace session). Filing anything publicly needs an explicit go-ahead.
 
 ---
 

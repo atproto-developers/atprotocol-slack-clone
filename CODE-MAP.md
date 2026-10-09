@@ -159,12 +159,35 @@ workspace layers even by accident.
 
 - `src/app/page.tsx` — the one page in the app; resolves session state and renders everything else.
 - `pnpm dev` / `pnpm build` / `pnpm start` — Next.js dev/build/prod (see `package.json`).
+- `pnpm playground` (`scripts/playground.ts`) — a local copy of the whole stack with ready-made accounts, for trying the app by hand (`ATPROTO_PINNED_CHECKOUT` must point at the built pinned checkout).
 - `pnpm reconcile` (`scripts/reconcile-workspaces.ts`) — the scheduled membership-reconciliation job (`docs/operations.md`).
 - `pnpm backup:db` (`scripts/backup-db.mjs`) — online SQLite backup.
-- `pnpm test` — unit tests (`node --test` over every `src/**/*.test.ts`).
+- `pnpm test` — unit tests (`node --test` over every `src/**/*.test.ts`), plus `bdd/gate.test.ts`, which keeps the Gherkin features honest (below).
+- `pnpm test:bdd` — builds, then runs the executable Gherkin scenarios in `features/` with `@cucumber/cucumber`, driving real browsers against a real pinned PDS network.
 - `pnpm test:acceptance` — builds, then runs `protocol-tests/{app-acceptance,reconcile-workspaces,dm-acceptance}.test.ts` against a real pinned PDS network (needs `ATPROTO_PINNED_CHECKOUT`).
 - `pnpm test:browser` — builds, then runs Playwright specs in `protocol-tests/browser/` (`--test-concurrency=1`, since both specs start real Next.js server subprocesses).
 - `pnpm test:performance` — `protocol-tests/{performance-envelope,dm-performance}.test.ts` (slow; the channel envelope test is ~30 minutes).
+
+## Executable Gherkin
+
+`features/*.feature` are the behavior contract. Every scenario is executable except the ones tagged `@unbound` (currently one: the UI offers no way to remove the last admin, so `protocol-tests/app-acceptance.test.ts` covers it):
+
+```
+features/*.feature        scenarios; @unbound = no step definitions yet (needs a "# unbound:" reason above it);
+                          @slow = delegates to a long protocol test, run with `pnpm test:bdd:slow`
+bdd/steps/*.steps.ts      step definitions per feature, written as what a person does and sees
+bdd/support/ui.ts         shared helpers, one per user action (sign in, consent, create, invite, join)
+bdd/support/*-ui.ts       per-feature helpers (channels, private requests, lifecycle, independent app, DMs)
+bdd/support/world.ts      per-scenario world: fresh accounts and browser contexts, PDS reads, read-only app DB
+bdd/support/hooks.ts      starts the shared fixture once; BDD_HEADED=1 BDD_BROWSER_CHANNEL=chrome opens real Chrome
+bdd/gate.test.ts          runs in `pnpm test`: the @unbound count may only go down, every @unbound says why,
+                          every bound scenario (including @slow) has a definition for every step
+protocol-tests/support/app-fixture.ts
+                          the stack (two PDS hosts, PLC, lexicons, `next start`) used by the BDD run and
+                          `pnpm playground`; `startSecondApp({env})` adds an independent app instance
+```
+
+Run: `pnpm test:bdd` (headless), `pnpm test:bdd:chrome` (visible Google Chrome), `pnpm test:bdd:slow` (the delegated failure-injection and 200-member envelope runs). Steps drive the real UI and assert on observable facts (the page, the PDS, the journal); a scenario that passes proves a journey works for a person. Where a browser cannot reach the mechanism (injected PDS write failures, a 2,000,000-record workload) the step runs the existing protocol test as a child process and says so. `protocol-tests/browser/*.spec.ts` and `protocol-tests/app-acceptance.test.ts` still carry their own copies of the stack set-up and should move onto the shared fixture.
 
 ## Conventions
 
