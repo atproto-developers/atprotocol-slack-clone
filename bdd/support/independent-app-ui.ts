@@ -38,7 +38,7 @@ export function onPrimaryApp(world: AppWorld, actor: Actor): AppViewer {
 }
 
 export async function openViewer(world: AppWorld, account: Actor, origin: string, role: string): Promise<AppViewer> {
-  const context = await world.browser.newContext();
+  const context = await world.newContext(role);
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
   const viewer: AppViewer = { ...account, role, context, page, calls: [], origin, requestUrls: [] };

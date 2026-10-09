@@ -16,6 +16,7 @@
     "lint": "eslint .",
     "test": "node --import tsx --test 'src/**/*.test.ts' 'bdd/**/*.test.ts'",
     "test:bdd": "pnpm build && NODE_OPTIONS=--import=tsx cucumber-js",
+    "test:bdd:video": "pnpm build && rm -rf test-results/videos && mkdir -p test-results/videos && (BDD_BROWSER_CHANNEL=chrome BDD_VIDEO_DIR=test-results/videos NODE_OPTIONS=--import=tsx cucumber-js; status=$?; node --import tsx scripts/render-bdd-video.ts test-results/videos; exit $status)",
     "test:bdd:slow": "pnpm build && NODE_OPTIONS=--import=tsx cucumber-js --profile slow",
     "test:bdd:chrome": "pnpm build && BDD_HEADED=1 BDD_BROWSER_CHANNEL=chrome NODE_OPTIONS=--import=tsx cucumber-js",
     "test:acceptance": "pnpm build && node --import tsx --test protocol-tests/app-acceptance.test.ts protocol-tests/reconcile-workspaces.test.ts protocol-tests/dm-acceptance.test.ts",

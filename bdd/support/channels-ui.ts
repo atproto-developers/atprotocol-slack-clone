@@ -113,7 +113,7 @@ export async function waitForSite(site: Site, actor: Actor): Promise<void> {
 /** The same account in another browser context, signed in to a different app. Registered so the scenario closes it. */
 export async function startSessionOn(world: AppWorld, actor: Actor, site: Site, label: string): Promise<Actor> {
   const role = `${actor.role}@${label}`;
-  const context = await world.browser.newContext();
+  const context = await world.newContext(role);
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
   const session: Actor = { ...actor, role, context, page, calls: [] };

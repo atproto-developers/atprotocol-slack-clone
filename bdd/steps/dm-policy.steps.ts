@@ -679,7 +679,7 @@ Given("the app server, its database, and its notification endpoint are gone", { 
 When("a participant signs in with any conforming OAuth client", { timeout: SETUP_TIMEOUT }, async function (this: AppWorld) {
   const alice = actorNamed(this, "alice");
   const second = this.scratch.get("secondApp") as SecondApp;
-  const context = await this.browser.newContext();
+  const context = await this.newContext("alice-elsewhere");
   const requested: string[] = [];
   const notificationStreamAttempts: string[] = [];
   context.on("request", (request) => { requested.push(request.url()); });

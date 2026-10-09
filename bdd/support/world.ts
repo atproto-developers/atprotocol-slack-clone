@@ -16,6 +16,7 @@ export type ApiCall = {
 export type Actor = FixtureAccount & { role: string; context: BrowserContext; page: Page; calls: ApiCall[] };
 
 let sequence = 0;
+const VIDEO_SIZE = { width: 1280, height: 720 };
 
 /** One scenario: its own accounts and browser contexts on the shared fixture, driven through the real UI. */
 export class AppWorld extends World {
@@ -26,6 +27,10 @@ export class AppWorld extends World {
   workspaceUri = "";
   inviteLink = "";
   scratch = new Map<string, unknown>();
+  startedAt = Date.now();
+  readonly contexts: BrowserContext[] = [];
+  /** Pages in creation order with the label of the session they belong to, for the optional session recording. */
+  readonly clips: Array<{ page: Page; label: string; startedAt: number }> = [];
   private readonly recordings = new Set<Promise<void>>();
   private readonly unreadableBodies: string[] = [];
   private closed = false;
@@ -45,7 +50,7 @@ export class AppWorld extends World {
     sequence += 1;
     const suffix = `${Date.now().toString(36).slice(-4)}${sequence.toString(36)}`;
     const account = await this.fixture.createAccount(`${role.slice(0, 8)}${suffix}.${host === 0 ? "test" : "test2"}`, host);
-    const context = await this.browser.newContext();
+    const context = await this.newContext(role);
     await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: this.appOrigin });
     const page = await context.newPage();
     page.setDefaultTimeout(30_000);
@@ -53,6 +58,15 @@ export class AppWorld extends World {
     this.recordCalls(actor);
     this.actors.set(role, actor);
     return actor;
+  }
+
+  /** A browser context for one session of this scenario. With BDD_VIDEO_DIR set, every page in it is recorded to a video. */
+  async newContext(label: string): Promise<BrowserContext> {
+    const videoDir = process.env.BDD_VIDEO_DIR;
+    const context = await this.browser.newContext(videoDir ? { viewport: VIDEO_SIZE, recordVideo: { dir: videoDir, size: VIDEO_SIZE } } : {});
+    this.contexts.push(context);
+    if (videoDir) context.on("page", (page) => this.clips.push({ page, label, startedAt: Date.now() }));
+    return context;
   }
 
   /**
@@ -120,7 +134,8 @@ export class AppWorld extends World {
   async closeActors(): Promise<void> {
     await Promise.race([Promise.all([...this.recordings]), new Promise((resolve) => setTimeout(resolve, 10_000).unref())]);
     this.closed = true;
-    for (const actor of this.actors.values()) await actor.context.close().catch(() => undefined);
+    for (const context of this.contexts) await context.close().catch(() => undefined);
+    this.contexts.length = 0;
     this.actors.clear();
     assert.deepEqual(this.unreadableBodies, [], "the recorder could not read these response bodies, so no assertion could have seen them");
   }
